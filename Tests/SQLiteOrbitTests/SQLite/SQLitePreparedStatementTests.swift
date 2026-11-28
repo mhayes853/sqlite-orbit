@@ -225,6 +225,87 @@
     }
 
     @Test
+    func aStatementReportsItsColumnsWhetherItOnlyReadsAndItsRegionsBeforeItRuns() throws {
+      var owner = try itemsConnection()
+      try owner.read { transaction in
+        let select = try transaction.prepare("SELECT a, label AS name FROM items WHERE grp = ?")
+        var names = [String]()
+        for index in 0..<select.columnCount { names.append(select.columnName(at: index)) }
+        #expect(names == ["a", "name"])
+        #expect(select.isReadOnly == true)
+        #expect(
+          select.readRegion
+            == OrbitDatabaseRegion(columns: ["a", "label", "grp"], in: "items")
+        )
+        #expect(select.changedRegion == .empty)
+      }
+      try owner.write { transaction in
+        let update = try transaction.prepare("UPDATE items SET label = ? WHERE a = ?")
+        #expect(update.columnCount == 0)
+        #expect(update.isReadOnly == false)
+        let updateRead = update.readRegion
+        #expect(updateRead.contains(OrbitDatabaseRegion(column: "a", in: "items")))
+        #expect(update.changedRegion == OrbitDatabaseRegion(column: "label", in: "items"))
+
+        let insert = try transaction.prepare("INSERT INTO items (a) VALUES (?) RETURNING a, grp")
+        #expect(insert.columnCount == 2)
+        #expect(insert.columnName(at: 1) == "grp")
+        #expect(insert.isReadOnly == false)
+        let insertChanged = insert.changedRegion
+        #expect(insertChanged.overlaps(OrbitDatabaseRegion(table: "items")))
+
+        for sql: SQL in ["", "-- nothing"] {
+          let nothing = try transaction.prepare(sql)
+          #expect(nothing.columnCount == 0)
+          #expect(nothing.isReadOnly == true)
+          #expect(nothing.readRegion == .empty)
+          #expect(nothing.changedRegion == .empty)
+        }
+      }
+    }
+
+    @Test
+    func aStatementsRegionsIncludeWhatItsTriggersAndViewsTouch() throws {
+      var owner = try itemsConnection()
+      try owner.write { transaction in
+        try transaction.executeScript(
+          """
+          CREATE TABLE log (a INTEGER);
+          CREATE TRIGGER logged AFTER INSERT ON items BEGIN INSERT INTO log VALUES (new.a); END;
+          CREATE VIEW labels AS SELECT label FROM items;
+          """
+        )
+        let insert = try transaction.prepare("INSERT INTO items (a) VALUES (?)")
+        let changed = insert.changedRegion
+        #expect(changed.overlaps(OrbitDatabaseRegion(table: "log")))
+        #expect(changed.overlaps(OrbitDatabaseRegion(table: "items")))
+
+        let view = try transaction.prepare("SELECT label FROM labels")
+        let read = view.readRegion
+        #expect(read.contains(OrbitDatabaseRegion(column: "label", in: "items")))
+      }
+    }
+
+    @Test
+    func aStatementReportsTheColumnsAndRegionOfItsLatestCompilation() throws {
+      var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
+      try owner.write { transaction in
+        try transaction.execute("CREATE TABLE t (a INTEGER)")
+        try transaction.execute("INSERT INTO t VALUES (1)")
+        var all = try transaction.prepare("SELECT * FROM t")
+        #expect(all.columnCount == 1)
+
+        try transaction.execute("ALTER TABLE t ADD COLUMN b INTEGER DEFAULT 7")
+        _ = try all.fetchAll { $0.columnCount }
+
+        #expect(all.columnCount == 2)
+        #expect(all.columnName(at: 1) == "b")
+        let read = all.readRegion
+        #expect(read.contains(OrbitDatabaseRegion(column: "b", in: "t")))
+      }
+    }
+
+    @Test
     func aCursorDroppedPartwayLeavesTheStatementReadyToRunAgain() throws {
       var owner = try itemsConnection()
       try owner.read { transaction in

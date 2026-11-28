@@ -17,7 +17,13 @@
   /// ```
   public final class TursoPool: OrbitConcurrentDatabaseWriter, OrbitObservableDatabase {
     /// The database this pool's connections are open on.
-    public let path: OrbitDatabasePath
+    public var path: OrbitDatabasePath { metadata.path }
+
+    /// The settings this pool was opened with.
+    ///
+    /// Its configuration is the one passed when opening, before the pool switches its writers to
+    /// MVCC.
+    public let metadata: SQLiteDatabaseMetadata
 
     private let pool: SQLiteConnectionPool
     private let transactionObservers = OrbitCompositeDatabaseTransactionObserver()
@@ -62,7 +68,11 @@
         readerCount: readerCount,
         writerCount: writerCount
       )
-      self.path = path
+      self.metadata = SQLiteDatabaseMetadata(
+        path: path,
+        configuration: configuration,
+        readerCount: readerCount
+      )
     }
 
     /// Runs `body` in a read transaction on one of the pool's reader connections.
@@ -211,6 +221,8 @@
       pool.captureActiveWriters()
     }
   }
+
+  extension TursoPool: SQLiteDatabaseMetadataProviding {}
 
   extension TursoPool: OrbitMemoryReleasing {
     /// Closes the pool's readers and finalizes the idle statements of each writer.

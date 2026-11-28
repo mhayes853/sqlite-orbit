@@ -23,6 +23,19 @@
   }
 
   @Test
+  func tursoPoolReportsTheConfigurationItWasGivenRatherThanMVCC() async throws {
+    try await withTestDatabaseFile("turso") { file in
+      let database = try file.tursoPool(readerCount: 3)
+
+      #expect(database.metadata.path == file.path)
+      #expect(database.metadata.path == database.path)
+      #expect(database.metadata.configuration.journalMode == nil)
+      #expect(database.metadata.configuration.library.name == "Turso")
+      #expect(database.metadata.readerCount == 3)
+    }
+  }
+
+  @Test
   func tursoRunsAPoolConfinedToOneProcess() async throws {
     try await withTestDatabaseFile("turso") { file in
       let database = try file.tursoPool()

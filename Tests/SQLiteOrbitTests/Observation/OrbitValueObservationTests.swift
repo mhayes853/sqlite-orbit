@@ -231,6 +231,113 @@
     }
 
     @Test
+    func resolvedRegionIsWorkedOutOnceInTheFirstReadAndWatchedFromThenOn() async throws {
+      let driver = try await itemsDatabase()
+      try await driver.execute(sql: "CREATE TABLE labels (id INTEGER PRIMARY KEY)")
+      let resolutions = TestCounter()
+      // The fetch reads labels as well, but the region names only items, so a write to labels
+      // goes unwatched until a write to items prompts the next fetch.
+      let observation = OrbitValueObservation<Int>
+        .tracking(
+          region: { transaction in
+            resolutions.increment()
+            return try OrbitDatabaseRegion(itemCountSQL, in: transaction)
+          },
+          { transaction in
+            let items = try transaction.fetchOne(itemCountSQL, as: Int.self) ?? 0
+            let labels =
+              try transaction.fetchOne("SELECT count(*) FROM labels", as: Int.self) ?? 0
+            return items + labels
+          }
+        )
+      _ = observation.values(in: driver)
+      #expect(resolutions.value == 0)
+
+      let recorder = ObservationRecorder<Int>()
+      let subscription = try observation.subscribe(
+        to: driver,
+        onError: recorder.record(error:),
+        onChange: recorder.record(change:)
+      )
+      try await recorder.waitForChangeCount(1)
+      try await insertItems(1, into: driver)
+      try await recorder.waitForChangeCount(2)
+      try await driver.write { transaction in
+        try transaction.execute("INSERT INTO labels (id) VALUES (1)")
+      }
+      try await Task.sleep(for: .milliseconds(100))
+      #expect(recorder.changes.map(\.value) == [0, 1])
+
+      try await insertItems(2, into: driver)
+      try await recorder.waitForChangeCount(3)
+
+      #expect(recorder.changes.map(\.value) == [0, 1, 3])
+      #expect(resolutions.value == 1)
+      #expect(recorder.errors.isEmpty)
+      _ = subscription
+    }
+
+    @Test
+    func resolvedRegionIsWorkedOutOncePerDatabase() async throws {
+      let first = try await itemsDatabase()
+      let second = try await itemsDatabase()
+      let resolutions = TestCounter()
+      let observation = OrbitValueObservation<Int>
+        .tracking(
+          region: { transaction in
+            resolutions.increment()
+            return try OrbitDatabaseRegion(itemCountSQL, in: transaction)
+          },
+          { transaction in try transaction.fetchOne(itemCountSQL, as: Int.self) ?? 0 }
+        )
+      let recorders = (0..<3).map { _ in ObservationRecorder<Int>() }
+      var subscriptions = [OrbitSubscription]()
+      for (recorder, database) in zip(recorders, [first, first, second]) {
+        subscriptions.append(
+          try observation.subscribe(
+            to: database,
+            onError: recorder.record(error:),
+            onChange: recorder.record(change:)
+          )
+        )
+        try await recorder.waitForChangeCount(1)
+      }
+      try await insertItems(1, into: second)
+      try await recorders[2].waitForChangeCount(2)
+
+      #expect(recorders.map { $0.changes.map(\.value) } == [[0], [0], [0, 1]])
+      // The two subscriptions to the first database share its runtime and its region.
+      #expect(resolutions.value == 2)
+      _ = subscriptions
+    }
+
+    @Test
+    func aResolvedRegionThatThrowsEndsTheObservationWithItsError() async throws {
+      let driver = try await itemsDatabase()
+      let fetchCount = TestCounter()
+      let observation = OrbitValueObservation<Int>
+        .tracking(
+          region: { _ in throw TestError("no region") },
+          { _ in
+            fetchCount.increment()
+            return 0
+          }
+        )
+      let recorder = ObservationRecorder<Int>()
+      let subscription = try observation.subscribe(
+        to: driver,
+        onError: recorder.record(error:),
+        onChange: recorder.record(change:)
+      )
+      try await waitUntil { !recorder.errors.isEmpty }
+
+      #expect(recorder.errors == ["no region"])
+      #expect(recorder.changes.isEmpty)
+      #expect(fetchCount.value == 0)
+      _ = subscription
+    }
+
+    @Test
     func taskScopedSubscribeDeliversUntilItsTaskIsCancelled() async throws {
       let driver = try await itemsDatabase()
       let events = TestRecorder<String>()

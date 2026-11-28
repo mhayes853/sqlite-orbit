@@ -23,7 +23,11 @@
 /// ```
 public final class SQLiteQueue: OrbitDatabaseWriter, OrbitObservableDatabase {
   /// The database this driver's connection is open on.
-  public let path: OrbitDatabasePath
+  public var path: OrbitDatabasePath { metadata.path }
+
+  /// The settings this driver was opened with. Its ``SQLiteDatabaseMetadata/readerCount`` is
+  /// always one, since reads and writes share the driver's one connection.
+  public let metadata: SQLiteDatabaseMetadata
 
   private let connection: SQLiteSerialConnection
   private let transactionObservers = OrbitCompositeDatabaseTransactionObserver()
@@ -39,7 +43,11 @@ public final class SQLiteQueue: OrbitDatabaseWriter, OrbitObservableDatabase {
     configuration: SQLiteConfiguration
   ) throws {
     self.connection = try SQLiteSerialConnection(path: path, configuration: configuration)
-    self.path = path
+    self.metadata = SQLiteDatabaseMetadata(
+      path: path,
+      configuration: configuration,
+      readerCount: 1
+    )
   }
 
   /// Runs `body` in a read transaction on the driver's one connection.
@@ -214,6 +222,8 @@ public final class SQLiteQueue: OrbitDatabaseWriter, OrbitObservableDatabase {
     transactionObservers.subscribe(transactionObserver, region: region)
   }
 }
+
+extension SQLiteQueue: SQLiteDatabaseMetadataProviding {}
 
 extension SQLiteQueue: OrbitMemoryReleasing {
   /// Releases the memory of the driver's connection once the accesses queued before the call are

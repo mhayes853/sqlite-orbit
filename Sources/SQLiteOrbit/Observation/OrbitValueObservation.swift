@@ -82,6 +82,9 @@ private enum OrbitValueObservationRegionSource: Sendable {
   case automatic
   case constantOnFirstFetch
   case constant(OrbitDatabaseRegion)
+  case resolvedOnFirstFetch(
+    @Sendable (borrowing SQLiteReadTransaction) throws -> OrbitDatabaseRegion
+  )
 
   var initialRegion: OrbitDatabaseRegion? {
     guard case .constant(let region) = self else { return nil }
@@ -103,6 +106,11 @@ private enum OrbitValueObservationRegionSource: Sendable {
       firstFetchRegion.record(output.region)
       return output
     case .constant(let region):
+      return (try fetch(transaction), region)
+    case .resolvedOnFirstFetch(let resolve):
+      if let region = firstFetchRegion.region { return (try fetch(transaction), region) }
+      let region = try resolve(transaction)
+      firstFetchRegion.record(region)
       return (try fetch(transaction), region)
     }
   }
@@ -299,8 +307,8 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   /// Use it only when the fetch's reads do not depend on what it finds. A fetch that reads one
   /// table and then, depending on a row it found there, reads a second is not one of these: the
   /// second table would go unwatched whenever the first fetch happened not to reach it, and a
-  /// write to it would be missed. ``tracking(region:_:)`` says the same thing ahead of time, for
-  /// a fetch whose region you already know.
+  /// write to it would be missed. The `tracking(region:_:)` overloads say the same thing ahead of
+  /// time, for a fetch whose region you already know.
   ///
   /// ```swift
   /// let incompleteCount = OrbitValueObservation.trackingConstantRegion { transaction in
@@ -329,6 +337,41 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
     _ fetch: @escaping @Sendable (borrowing SQLiteReadTransaction) throws -> Value
   ) -> Self {
     tracking(regionSource: .constant(region), fetch)
+  }
+
+  /// Creates an observation whose value is produced by `fetch` and whose region `region` works
+  /// out from the database.
+  ///
+  /// Use it when the region is fixed but depends on the schema, such as the tables a query names
+  /// or a table's columns. `region` runs once per runtime, in the same read transaction as the
+  /// first fetch and just before it, and the observation watches what it returns from then on.
+  /// Creating the observation, or one of its asynchronous sequences, reads nothing.
+  ///
+  /// The region is not worked out again when the schema changes, so a region that names columns
+  /// misses those added later.
+  ///
+  /// ```swift
+  /// let incompleteCount = OrbitValueObservation.tracking(
+  ///   region: { try OrbitDatabaseRegion("SELECT * FROM reminders", in: $0) },
+  ///   { transaction in
+  ///     try transaction.fetchOne(
+  ///       "SELECT count(*) FROM reminders WHERE NOT isCompleted",
+  ///       as: Int.self
+  ///     ) ?? 0
+  ///   }
+  /// )
+  /// ```
+  ///
+  /// - Parameters:
+  ///   - region: Works out the database region read by `fetch`. An error it throws ends the
+  ///     observation, as a failed first fetch does.
+  ///   - fetch: Reads the observed value from a transaction.
+  /// - Returns: An observation that produces whatever `fetch` returns.
+  public static func tracking(
+    region: @escaping @Sendable (borrowing SQLiteReadTransaction) throws -> OrbitDatabaseRegion,
+    _ fetch: @escaping @Sendable (borrowing SQLiteReadTransaction) throws -> Value
+  ) -> Self {
+    tracking(regionSource: .resolvedOnFirstFetch(region), fetch)
   }
 
   private static func tracking(
@@ -849,8 +892,10 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
 
   /// Starts this observation and delivers its changes through `scheduler`.
   ///
-  /// The observation runs until the returned subscription is cancelled or released, so store it
-  /// for as long as you want the callbacks. Without a `scheduler`, callbacks run asynchronously on
+  /// The subscription delivers changes until it is cancelled or released, so store it for as long
+  /// as you want the callbacks. Every subscription to this observation on the same database shares
+  /// one runtime, which stops when its last subscription ends; a subscription that joins a running
+  /// one starts from its latest value. Without a `scheduler`, callbacks run asynchronously on
   /// Swift's cooperative executor, as with ``OrbitValueObservationScheduler/async(priority:)``.
   ///
   /// The transaction observer is registered before the initial fetch, so a commit cannot fall into
@@ -885,7 +930,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   ///     without an extra hop. Defaults to the caller's isolation.
   ///   - onError: Receives the error that ends the observation.
   ///   - onChange: Receives each observed change.
-  /// - Returns: A subscription that ends the observation when cancelled or released.
+  /// - Returns: A subscription that leaves the shared runtime when cancelled or released.
   /// - Throws: Whatever registering a transaction observer on `database` throws.
   public func subscribe<
     Database: OrbitObservableDatabase,
@@ -933,7 +978,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   ///     without an extra hop. Defaults to the caller's isolation.
   ///   - onError: Receives the error that ends the observation.
   ///   - onUpdate: Receives the outcome of each accepted fetch.
-  /// - Returns: A subscription that ends the observation when cancelled or released.
+  /// - Returns: A subscription that leaves the shared runtime when cancelled or released.
   /// - Throws: Whatever registering a transaction observer on `database` throws.
   public func subscribe<
     Database: OrbitObservableDatabase,
@@ -989,7 +1034,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   ///   - scheduler: A scheduler that guarantees main-actor delivery.
   ///   - onError: Receives the error that ends the observation.
   ///   - onChange: Receives each observed change.
-  /// - Returns: A subscription that ends the observation when cancelled or released.
+  /// - Returns: A subscription that leaves the shared runtime when cancelled or released.
   /// - Throws: Whatever registering a transaction observer on `database` throws.
   @MainActor
   public func subscribe<
@@ -1111,7 +1156,9 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
 
   /// Returns an asynchronous sequence of values and the sources that prompted their fetches.
   ///
-  /// The observation starts when iteration begins and ends when the iterator is released.
+  /// Each iteration subscribes when it begins and gets its own buffer, sharing the observation's
+  /// runtime with every other subscription on the same database. Releasing the iterator ends its
+  /// subscription; the runtime stops when its last subscription ends.
   /// `bufferingPolicy` decides which elements survive when the observation produces them faster
   /// than the sequence is consumed; by default every one of them is kept.
   ///
@@ -1137,7 +1184,9 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
 
   /// Returns an asynchronous sequence of observed values without their source metadata.
   ///
-  /// The observation starts when iteration begins and ends when the iterator is released.
+  /// Each iteration subscribes when it begins and gets its own buffer, sharing the observation's
+  /// runtime with every other subscription on the same database. Releasing the iterator ends its
+  /// subscription; the runtime stops when its last subscription ends.
   /// `bufferingPolicy` decides which elements survive when the observation produces them faster
   /// than the sequence is consumed; by default every one of them is kept.
   ///
