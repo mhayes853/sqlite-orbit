@@ -221,11 +221,13 @@ jobs:
           - name: no traits
             sqlite: false
             flags: "--disable-default-traits"
-          # Windows has no system SQLite, so the `SystemSQLite` trait links vcpkg's. The tests are
-          # compiled as well, though not yet run.
+          # Windows has no system SQLite, so the `SystemSQLite` trait links vcpkg's. The library's
+          # tests are compiled as well, though not yet run. The macro tests are left to the other
+          # jobs: swift-macro-testing 0.7.0 has an ambiguous `String.init` on Windows, and a macro
+          # expands on the host rather than the target anyway.
           - name: SystemSQLite
             sqlite: true
-            flags: "--disable-default-traits --traits SystemSQLite --build-tests"
+            flags: "--disable-default-traits --traits SystemSQLite --target SQLiteOrbitTests"
     steps:
       - uses: actions/checkout@v4
 
