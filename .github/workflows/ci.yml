@@ -209,3 +209,44 @@ jobs:
 
       - name: Build
         run: swift build --disable-default-traits --swift-sdk swift-6.4.0-RELEASE_wasm
+
+  build-windows:
+    name: Windows (${{ matrix.name }})
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Links no SQLite, so it shows the Windows branches of the core compile on their own.
+          - name: no traits
+            sqlite: false
+            flags: "--disable-default-traits"
+          # Windows has no system SQLite, so the `SystemSQLite` trait links vcpkg's. The tests are
+          # compiled as well, though not yet run.
+          - name: SystemSQLite
+            sqlite: true
+            flags: "--disable-default-traits --traits SystemSQLite --build-tests"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: compnerd/gha-setup-swift@bbae8ce86bac5a3449f3992b3d88bc4ca25f2057
+        with:
+          swift-version: swift-6.4.0-release
+          swift-build: 6.4.0-RELEASE
+
+      - name: Install SQLite
+        if: matrix.sqlite
+        shell: pwsh
+        run: |
+          & "$env:VCPKG_INSTALLATION_ROOT\vcpkg.exe" install sqlite3:x64-windows
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $installed = "$env:VCPKG_INSTALLATION_ROOT\installed\x64-windows"
+          "SQLITE_FLAGS=-Xcc -I$installed\include -Xlinker -L$installed\lib" >> $env:GITHUB_ENV
+          "$installed\bin" >> $env:GITHUB_PATH
+
+      - name: Build
+        shell: pwsh
+        run: |
+          $flags = "${{ matrix.flags }} $env:SQLITE_FLAGS".Split(' ', [StringSplitOptions]::RemoveEmptyEntries)
+          swift build @flags
+          exit $LASTEXITCODE
