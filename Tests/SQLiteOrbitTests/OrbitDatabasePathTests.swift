@@ -103,62 +103,32 @@ struct OrbitDatabasePathTests {
       }
     }
 
-    @Test
-    func aRelativeDanglingSymlinkIsResolvedFromItsCanonicalParent() throws {
+    // `linked` is a symlink to `real/nested`, so both spellings lead to `real/db.sqlite`: a
+    // relative link is read from the directory it really sits in, and `..` after a symlink
+    // leaves the symlink's target, as the filesystem resolves them.
+    @Test(arguments: [
+      (link: "linked/link.sqlite", destination: "../db.sqlite"),
+      (link: "link.sqlite", destination: "linked/../db.sqlite")
+    ])
+    func aRelativeDanglingSymlinkResolvesInFilesystemOrder(
+      link: String,
+      destination: String
+    ) throws {
       try withTemporaryDirectory("path-identity") { directory in
-        let realDirectory = directory.appending(path: "real/nested", directoryHint: .isDirectory)
-        let linkedDirectory = directory.appending(path: "linked", directoryHint: .isDirectory)
+        let nested = directory.appending(path: "real/nested", directoryHint: .isDirectory)
+        let linked = directory.appending(path: "linked", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: nested, withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: linked, withDestinationURL: nested)
+        let link = directory.appending(path: link)
         let real = directory.appending(path: "real/db.sqlite")
-        let link = linkedDirectory.appending(path: "link.sqlite")
-        try FileManager.default.createDirectory(
-          at: realDirectory,
-          withIntermediateDirectories: true
-        )
-        try FileManager.default.createSymbolicLink(
-          at: linkedDirectory,
-          withDestinationURL: realDirectory
-        )
         try FileManager.default.createSymbolicLink(
           atPath: link.path,
-          withDestinationPath: "../db.sqlite"
+          withDestinationPath: destination
         )
 
         #expect(
           OrbitDatabaseIdentifier.forDatabase(path: OrbitDatabasePath(link.path))
             == .forDatabase(path: OrbitDatabasePath(real.path))
-        )
-      }
-    }
-
-    @Test
-    func dotDotAfterASymlinkIsResolvedInFilesystemOrder() throws {
-      try withTemporaryDirectory("path-identity") { directory in
-        let targetDirectory = directory.appending(
-          path: "target/nested",
-          directoryHint: .isDirectory
-        )
-        let intermediateLink = directory.appending(
-          path: "intermediate",
-          directoryHint: .isDirectory
-        )
-        let database = directory.appending(path: "target/db.sqlite")
-        let databaseLink = directory.appending(path: "link.sqlite")
-        try FileManager.default.createDirectory(
-          at: targetDirectory,
-          withIntermediateDirectories: true
-        )
-        try FileManager.default.createSymbolicLink(
-          at: intermediateLink,
-          withDestinationURL: targetDirectory
-        )
-        try FileManager.default.createSymbolicLink(
-          atPath: databaseLink.path,
-          withDestinationPath: "intermediate/../db.sqlite"
-        )
-
-        #expect(
-          OrbitDatabaseIdentifier.forDatabase(path: OrbitDatabasePath(databaseLink.path))
-            == .forDatabase(path: OrbitDatabasePath(database.path))
         )
       }
     }

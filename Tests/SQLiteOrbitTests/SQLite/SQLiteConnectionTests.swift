@@ -88,31 +88,18 @@
     #expect(try scalar(disabled, "PRAGMA application_id") == 42)
   }
 
-  @Test(.libraryHooks)
-  func statementCacheReusesACheckedInStatementAndLendsAnotherForOverlappingUse() throws {
+  /// Runs `body` with an in-memory connection whose library counts what it prepares and
+  /// finalizes, and whose cache keeps at most `maximumCachedStatements`.
+  private func withCountingConnection(
+    maximumCachedStatements: Int = .max,
+    _ body: (borrowing SQLiteConnection, SQLiteCallCounters) throws -> Void
+  ) throws {
     let counters = SQLiteCallCounters()
     var configuration = SQLiteConfiguration.default
     configuration.library = countingLibrary(counters)
-
+    configuration.maximumCachedStatements = maximumCachedStatements
     let connection = try openInMemory(configuration)
-    let afterOpen = counters.preparedCount
-
-    let sql = "SELECT 1"
-    for _ in 0..<10 {
-      let statement = try connection.statements.checkOut(sql)
-      connection.statements.checkIn(statement)
-    }
-
-    // Ten executions, one parse.
-    #expect(counters.preparedCount == afterOpen + 1)
-
-    // Two at once cannot share one statement, so the second is prepared anew.
-    let first = try connection.statements.checkOut(sql)
-    let second = try connection.statements.checkOut(sql)
-    #expect(first.pointer != second.pointer)
-    #expect(counters.preparedCount == afterOpen + 2)
-    connection.statements.checkIn(first)
-    connection.statements.checkIn(second)
+    try body(connection, counters)
   }
 
   /// Runs each of `sqls` through the cache once, in order.
@@ -124,45 +111,90 @@
   }
 
   @Test(.libraryHooks)
-  func aFullStatementCacheEvictsTheLeastRecentlyUsedStatement() throws {
-    let counters = SQLiteCallCounters()
-    var configuration = SQLiteConfiguration.default
-    configuration.library = countingLibrary(counters)
-    configuration.maximumCachedStatements = 2
+  func statementCacheReusesACheckedInStatementAndLendsAnotherForOverlappingUse() throws {
+    try withCountingConnection { connection, counters in
+      let afterOpen = counters.preparedCount
+      // Ten executions, one parse.
+      try use(Array(repeating: "SELECT 1", count: 10), on: connection)
+      #expect(counters.preparedCount == afterOpen + 1)
 
-    let connection = try openInMemory(configuration)
-    try use(["SELECT 1", "SELECT 2", "SELECT 3"], on: connection)
-    #expect(connection.statements.idleStatementCount == 2)
-
-    // The two most recent are still cached, and the first was finalized to make room.
-    let prepared = counters.preparedCount
-    let finalized = counters.finalizedCount
-    try use(["SELECT 2", "SELECT 3"], on: connection)
-    #expect(counters.preparedCount == prepared)
-    try use(["SELECT 1"], on: connection)
-    #expect(counters.preparedCount == prepared + 1)
-    // Bringing it back evicted `SELECT 2`, the least recently used of the two.
-    #expect(counters.finalizedCount == finalized + 1)
-    try use(["SELECT 3", "SELECT 1"], on: connection)
-    #expect(counters.preparedCount == prepared + 1)
+      // Two at once cannot share one statement, so the second is prepared anew.
+      let first = try connection.statements.checkOut("SELECT 1")
+      let second = try connection.statements.checkOut("SELECT 1")
+      #expect(first.pointer != second.pointer)
+      #expect(counters.preparedCount == afterOpen + 2)
+      connection.statements.checkIn(first)
+      connection.statements.checkIn(second)
+    }
   }
 
-  @Test(.libraryHooks)
-  func aRecentlyUsedStatementOutlivesAnOlderOne() throws {
-    let counters = SQLiteCallCounters()
-    var configuration = SQLiteConfiguration.default
-    configuration.library = countingLibrary(counters)
-    configuration.maximumCachedStatements = 2
+  /// A run of statements through a cache of some capacity, and which of them it should then
+  /// hold: the most recently used, however they got there.
+  struct SQLiteStatementCacheHistory: Sendable, CustomTestStringConvertible {
+    let capacity: Int
+    let history: [Int]
+    let cached: [Int]
+    let evicted: [Int]
+    let testDescription: String
+  }
 
-    let connection = try openInMemory(configuration)
-    // `SELECT 1` was cached first, but reusing it makes `SELECT 2` the one to go.
-    try use(["SELECT 1", "SELECT 2", "SELECT 1", "SELECT 3"], on: connection)
+  @Test(
+    .libraryHooks,
+    arguments: [
+      SQLiteStatementCacheHistory(
+        capacity: 2,
+        history: [1, 2, 3],
+        cached: [2, 3],
+        evicted: [1],
+        testDescription: "a full cache evicts the least recently used"
+      ),
+      SQLiteStatementCacheHistory(
+        capacity: 2,
+        history: [1, 2, 1, 3],
+        cached: [1, 3],
+        evicted: [2],
+        testDescription: "reuse outlives an older statement"
+      ),
+      SQLiteStatementCacheHistory(
+        capacity: .max,
+        history: [1, 2, 1, 2, 1, 2, 1, 2, 1, 2],
+        cached: [1, 2],
+        evicted: [],
+        testDescription: "alternating between two reuses both"
+      ),
+      SQLiteStatementCacheHistory(
+        capacity: 1,
+        history: [1, 2],
+        cached: [2],
+        evicted: [1],
+        testDescription: "the most recent statement counts toward the capacity"
+      ),
+      SQLiteStatementCacheHistory(
+        capacity: 2,
+        history: [2, 1, 1, 3],
+        cached: [1, 3],
+        evicted: [2],
+        testDescription: "a statement leaving the most recent slot is evicted in its turn"
+      )
+    ]
+  )
+  func aStatementCacheKeepsTheMostRecentlyUsedStatements(_ run: SQLiteStatementCacheHistory) throws
+  {
+    try withCountingConnection(maximumCachedStatements: run.capacity) { connection, counters in
+      let select = { (values: [Int]) in values.map { "SELECT \($0)" } }
+      let afterOpen = (counters.preparedCount, counters.finalizedCount)
+      try use(select(run.history), on: connection)
+      #expect(connection.statements.idleStatementCount == run.cached.count)
+      // Each distinct statement was prepared once, and all but those kept were finalized.
+      let prepared = counters.preparedCount
+      #expect(prepared - afterOpen.0 == Set(run.history).count)
+      #expect(counters.finalizedCount - afterOpen.1 == Set(run.history).count - run.cached.count)
 
-    let prepared = counters.preparedCount
-    try use(["SELECT 1", "SELECT 3"], on: connection)
-    #expect(counters.preparedCount == prepared)
-    try use(["SELECT 2"], on: connection)
-    #expect(counters.preparedCount == prepared + 1)
+      try use(select(run.cached), on: connection)
+      #expect(counters.preparedCount == prepared)
+      try use(select(run.evicted), on: connection)
+      #expect(counters.preparedCount == prepared + run.evicted.count)
+    }
   }
 
   @Test
@@ -175,155 +207,81 @@
 
   @Test(.libraryHooks)
   func aStatementCacheWithoutCapacityKeepsNothing() throws {
-    let counters = SQLiteCallCounters()
-    var configuration = SQLiteConfiguration.default
-    configuration.library = countingLibrary(counters)
-    configuration.maximumCachedStatements = 0
-
-    let connection = try openInMemory(configuration)
-    let prepared = counters.preparedCount
-    let persistent = counters.preparedPersistentCount
-    let finalized = counters.finalizedCount
-    try use(["SELECT 1", "SELECT 1", "SELECT 2"], on: connection)
-    #expect(connection.statements.idleStatementCount == 0)
-    #expect(counters.preparedCount == prepared + 3)
-    #expect(counters.finalizedCount == finalized + 3)
-    // Nothing is kept, so nothing is prepared as though it would be.
-    #expect(counters.preparedPersistentCount == persistent)
-  }
-
-  @Test(.libraryHooks)
-  func alternatingBetweenTwoStatementsReusesBoth() throws {
-    let counters = SQLiteCallCounters()
-    var configuration = SQLiteConfiguration.default
-    configuration.library = countingLibrary(counters)
-
-    let connection = try openInMemory(configuration)
-    let prepared = counters.preparedCount
-    let finalized = counters.finalizedCount
-    // Each moves the other out of the slot for the most recent statement, and back.
-    for _ in 0..<5 {
-      try use(["SELECT 1", "SELECT 2"], on: connection)
+    try withCountingConnection(maximumCachedStatements: 0) { connection, counters in
+      let prepared = counters.preparedCount
+      let persistent = counters.preparedPersistentCount
+      let finalized = counters.finalizedCount
+      try use(["SELECT 1", "SELECT 1", "SELECT 2"], on: connection)
+      #expect(connection.statements.idleStatementCount == 0)
+      #expect(counters.preparedCount == prepared + 3)
+      #expect(counters.finalizedCount == finalized + 3)
+      // Nothing is kept, so nothing is prepared as though it would be.
+      #expect(counters.preparedPersistentCount == persistent)
     }
-    #expect(counters.preparedCount == prepared + 2)
-    #expect(counters.finalizedCount == finalized)
-    #expect(connection.statements.idleStatementCount == 2)
-  }
-
-  @Test(.libraryHooks)
-  func theMostRecentStatementCountsTowardTheCapacity() throws {
-    let counters = SQLiteCallCounters()
-    var configuration = SQLiteConfiguration.default
-    configuration.library = countingLibrary(counters)
-    configuration.maximumCachedStatements = 1
-
-    let connection = try openInMemory(configuration)
-    let finalized = counters.finalizedCount
-    try use(["SELECT 1", "SELECT 2"], on: connection)
-    #expect(connection.statements.idleStatementCount == 1)
-    #expect(counters.finalizedCount == finalized + 1)
-
-    let prepared = counters.preparedCount
-    try use(["SELECT 2"], on: connection)
-    #expect(counters.preparedCount == prepared)
-    try use(["SELECT 1"], on: connection)
-    #expect(counters.preparedCount == prepared + 1)
-  }
-
-  @Test(.libraryHooks)
-  func aStatementLeavingTheMostRecentSlotIsEvictedInItsTurn() throws {
-    let counters = SQLiteCallCounters()
-    var configuration = SQLiteConfiguration.default
-    configuration.library = countingLibrary(counters)
-    configuration.maximumCachedStatements = 2
-
-    let connection = try openInMemory(configuration)
-    // `SELECT 2` is the most recent, then `SELECT 1` takes its place and leaves it the oldest.
-    try use(["SELECT 2", "SELECT 1"], on: connection)
-    let lent = try connection.statements.checkOut("SELECT 1")
-    connection.statements.checkIn(lent)
-
-    let prepared = counters.preparedCount
-    let finalized = counters.finalizedCount
-    try use(["SELECT 3"], on: connection)
-    #expect(counters.finalizedCount == finalized + 1)
-    try use(["SELECT 1", "SELECT 3"], on: connection)
-    #expect(counters.preparedCount == prepared + 1)
-    try use(["SELECT 2"], on: connection)
-    #expect(counters.preparedCount == prepared + 2)
   }
 
   @Test(.libraryHooks)
   func invalidatingTheStatementCacheFinalizesTheMostRecentStatement() throws {
-    let counters = SQLiteCallCounters()
-    var configuration = SQLiteConfiguration.default
-    configuration.library = countingLibrary(counters)
-
-    let connection = try openInMemory(configuration)
-    try use(["SELECT 1", "SELECT 2"], on: connection)
-    let prepared = counters.preparedCount
-    let finalized = counters.finalizedCount
-    connection.statements.invalidate()
-    #expect(connection.statements.idleStatementCount == 0)
-    #expect(counters.finalizedCount == finalized + 2)
-    try use(["SELECT 2"], on: connection)
-    #expect(counters.preparedCount == prepared + 1)
+    try withCountingConnection { connection, counters in
+      try use(["SELECT 1", "SELECT 2"], on: connection)
+      let prepared = counters.preparedCount
+      let finalized = counters.finalizedCount
+      connection.statements.invalidate()
+      #expect(connection.statements.idleStatementCount == 0)
+      #expect(counters.finalizedCount == finalized + 2)
+      try use(["SELECT 2"], on: connection)
+      #expect(counters.preparedCount == prepared + 1)
+    }
   }
 
   @Test(.libraryHooks)
   func aStatementLentWhileTheSameSQLWasCheckedInIsFinalized() throws {
-    let counters = SQLiteCallCounters()
-    var configuration = SQLiteConfiguration.default
-    configuration.library = countingLibrary(counters)
+    try withCountingConnection { connection, counters in
+      try use(["SELECT 1"], on: connection)
+      let finalized = counters.finalizedCount
 
-    let connection = try openInMemory(configuration)
-    try use(["SELECT 1"], on: connection)
-    let finalized = counters.finalizedCount
+      // Two uses at once, given back while the first is still the most recent statement.
+      let first = try connection.statements.checkOut("SELECT 1")
+      let second = try connection.statements.checkOut("SELECT 1")
+      connection.statements.checkIn(second)
+      connection.statements.checkIn(first)
+      #expect(counters.finalizedCount == finalized + 1)
+      #expect(connection.statements.idleStatementCount == 1)
 
-    // Two uses at once, given back while the first is still the most recent statement.
-    let first = try connection.statements.checkOut("SELECT 1")
-    let second = try connection.statements.checkOut("SELECT 1")
-    connection.statements.checkIn(second)
-    connection.statements.checkIn(first)
-    #expect(counters.finalizedCount == finalized + 1)
-    #expect(connection.statements.idleStatementCount == 1)
+      // And given back after another statement moved the second out of that slot.
+      let third = try connection.statements.checkOut("SELECT 1")
+      let fourth = try connection.statements.checkOut("SELECT 1")
+      connection.statements.checkIn(fourth)
+      try use(["SELECT 2"], on: connection)
+      connection.statements.checkIn(third)
+      #expect(counters.finalizedCount == finalized + 2)
+      #expect(connection.statements.idleStatementCount == 2)
+      #expect(third.pointer != fourth.pointer)
 
-    // And given back after another statement moved the second out of that slot.
-    let third = try connection.statements.checkOut("SELECT 1")
-    let fourth = try connection.statements.checkOut("SELECT 1")
-    connection.statements.checkIn(fourth)
-    try use(["SELECT 2"], on: connection)
-    connection.statements.checkIn(third)
-    #expect(counters.finalizedCount == finalized + 2)
-    #expect(connection.statements.idleStatementCount == 2)
-    #expect(third.pointer != fourth.pointer)
-
-    let prepared = counters.preparedCount
-    let fifth = try connection.statements.checkOut("SELECT 1")
-    #expect(fifth.pointer == fourth.pointer)
-    connection.statements.checkIn(fifth)
-    #expect(counters.preparedCount == prepared)
+      let prepared = counters.preparedCount
+      let fifth = try connection.statements.checkOut("SELECT 1")
+      #expect(fifth.pointer == fourth.pointer)
+      connection.statements.checkIn(fifth)
+      #expect(counters.preparedCount == prepared)
+    }
   }
 
   @Test(.libraryHooks)
   func aQueryBuiltFromTheSameLiteralFindsTheMostRecentStatement() throws {
-    let counters = SQLiteCallCounters()
-    var configuration = SQLiteConfiguration.default
-    configuration.library = countingLibrary(counters)
-
-    let connection = try openInMemory(configuration)
-    func query(_ value: Int, column: String) -> SQL {
-      "SELECT \(value) AS \(quote: column)"
+    try withCountingConnection { connection, counters in
+      func query(_ value: Int, column: String) -> SQL {
+        "SELECT \(value) AS \(quote: column)"
+      }
+      connection.statements.checkIn(try connection.statements.checkOut(query(0, column: "a")))
+      let prepared = counters.preparedCount
+      for value in 1..<5 {
+        connection.statements.checkIn(try connection.statements.checkOut(query(value, column: "a")))
+      }
+      #expect(counters.preparedCount == prepared)
+      // The same shape built from different text is a different statement.
+      connection.statements.checkIn(try connection.statements.checkOut(query(0, column: "b")))
+      #expect(counters.preparedCount == prepared + 1)
     }
-    connection.statements.checkIn(try connection.statements.checkOut(query(0, column: "a")))
-    let prepared = counters.preparedCount
-    for value in 1..<5 {
-      connection.statements.checkIn(try connection.statements.checkOut(query(value, column: "a")))
-    }
-    #expect(counters.preparedCount == prepared)
-    // The same shape built from different text is a different statement.
-    connection.statements.checkIn(try connection.statements.checkOut(query(0, column: "b")))
-    #expect(counters.preparedCount == prepared + 1)
   }
 
   @Test(.libraryHooks)
@@ -335,10 +293,7 @@
     do {
       let connection = try openInMemory(configuration)
       try connection.execute("CREATE TABLE items (id INTEGER PRIMARY KEY)")
-      for sql in ["SELECT 1", "SELECT 2", "SELECT 3"] {
-        let statement = try connection.statements.checkOut(sql)
-        connection.statements.checkIn(statement)
-      }
+      try use(["SELECT 1", "SELECT 2", "SELECT 3"], on: connection)
       #expect(counters.preparedCount > counters.finalizedCount)
     }
 
@@ -347,7 +302,7 @@
   }
 
   @Test
-  func openingReportsAnErrorRatherThanCreatingAMissingDatabase() throws {
+  func aMissingDatabaseAndAFailingStatementAreReported() throws {
     let path = temporaryDatabasePath("missing") + "/db.sqlite"
     #expect(throws: SQLiteError.self) {
       _ = try SQLiteConnection.open(
@@ -356,10 +311,8 @@
         configuration: .default
       )
     }
-  }
 
-  @Test
-  func executeReportsTheFailingSQL() throws {
+    // A failing statement is reported along with its SQL.
     let connection = try openInMemory()
     let error = #expect(throws: SQLiteError.self) {
       try connection.execute("SELECT * FROM missing")
@@ -369,7 +322,7 @@
   }
 
   @Test
-  func setupsRunOnEveryConnectionAndCanFailTheOpen() throws {
+  func setupsRunOnEveryConnectionWithItsLibraryAndCanFailTheOpen() throws {
     let installs = TestCounter()
     var configuration = SQLiteConfiguration.default
     configuration.setups = [
@@ -393,28 +346,24 @@
     #expect(throws: TestError()) {
       _ = try openInMemory(throwing)
     }
-  }
 
-  @Test
-  func aConnectionSetupIsHandedTheLibraryItsConnectionWasOpenedThrough() throws {
+    // A setup is handed the library its connection was opened through.
     let seenVersion = Lock<Int32?>(nil)
-    var configuration = SQLiteConfiguration.default
-    configuration.library.runtime.versionNumber = { 123_456 }
-    configuration.setups = [
+    var libraryConfiguration = SQLiteConfiguration.default
+    libraryConfiguration.library.runtime.versionNumber = { 123_456 }
+    libraryConfiguration.setups = [
       SQLiteSetup { connection in
         seenVersion.withLock { $0 = connection.sqlite.runtime.versionNumber() }
       }
     ]
 
-    _ = try openInMemory(configuration)
+    _ = try openInMemory(libraryConfiguration)
     #expect(seenVersion.withLock { $0 } == 123_456)
-  }
 
-  @Test
-  func connectionAccessExecutesSQLWithBindings() throws {
-    var configuration = SQLiteConfiguration.default
+    // Setups execute SQL, with bindings, on the connection they are handed.
+    var sqlConfiguration = SQLiteConfiguration.default
     let value = "bound during setup"
-    configuration.setups = [
+    sqlConfiguration.setups = [
       .script(
         "CREATE TABLE settings (value TEXT NOT NULL); INSERT INTO settings VALUES ('first');"
       ),
@@ -425,7 +374,7 @@
       .sql("DELETE FROM settings WHERE value = 'callback'")
     ]
 
-    let handle = try openInMemory(configuration)
+    let handle = try openInMemory(sqlConfiguration)
     #expect(try scalar(handle, "SELECT count(*) FROM settings") == 1)
     #expect(
       try scalar(handle, "SELECT count(*) FROM settings WHERE value = 'bound during setup'") == 1

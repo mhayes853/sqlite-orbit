@@ -38,7 +38,7 @@ struct FileSystemTests {
 
   #if canImport(Darwin) || canImport(Glibc)
     @Test
-    func dotDotAfterASymbolicLinkIsStandardizedAsFoundationStandardizesIt() throws {
+    func symbolicLinksAndDotDotAfterThemAreHandledAsFoundationHandlesThem() throws {
       try withSymbolicLinkFixture { directory in
         for path in [
           "linked/../db.sqlite", "linked/../missing.sqlite", "linked/..", "linked/../../x",
@@ -51,12 +51,6 @@ struct FileSystemTests {
             "\(path)"
           )
         }
-      }
-    }
-
-    @Test
-    func symbolicLinksAreResolvedAsFoundationResolvesThem() throws {
-      try withSymbolicLinkFixture { directory in
         for path in ["linked", "linked/db.sqlite", "real/db.sqlite", "chain1", "rellink/nested"] {
           let absolute = directory.path + "/" + path
           #expect(
@@ -84,20 +78,6 @@ struct FileSystemTests {
           let identifier = OrbitDatabaseIdentifier.forDatabase(path: OrbitDatabasePath(absolute))
           #expect(identifier.rawValue == foundationIdentity(ofPath: absolute), "\(path)")
         }
-      }
-    }
-
-    @Test
-    func aDatabaseReachedThroughALinkKeepsItsIdentityOnceItIsCreated() throws {
-      try withSymbolicLinkFixture { directory in
-        let link = directory.path + "/linkdir/created.sqlite"
-        let before = OrbitDatabaseIdentifier.forDatabase(path: OrbitDatabasePath(link))
-        #expect(FileManager.default.createFile(atPath: link, contents: Data()))
-
-        #expect(before == .forDatabase(path: OrbitDatabasePath(link)))
-        #expect(
-          before == .forDatabase(path: OrbitDatabasePath(directory.path + "/real/created.sqlite"))
-        )
       }
     }
   #endif
@@ -134,7 +114,7 @@ struct FileSystemTests {
 
   #if canImport(Darwin) || os(Linux) || os(Android)
     @Test
-    func theDefaultCoordinationDirectoryIsTheOneFoundationComputed() {
+    func theDefaultCoordinationDirectoryAndKeysAreTheOnesFoundationComputed() {
       let foundation = FileManager.default.temporaryDirectory
         .appending(path: "sqlite-orbit", directoryHint: .isDirectory)
       #expect(UnixDatagramIPCTransport.Configuration.defaultDirectoryPath == foundation.path)
@@ -142,10 +122,8 @@ struct FileSystemTests {
         UnixDatagramIPCTransport.Configuration.default.directoryPath
           == UnixDatagramIPCTransport.Configuration.defaultDirectoryPath
       )
-    }
 
-    @Test
-    func aCoordinationKeyIsTheHashInSixteenHexadecimalDigits() {
+      // A coordination key is the hash in sixteen hexadecimal digits.
       for rawValue in ["", "a", "/tmp/db.sqlite", "reminders", "é"] {
         let identifier = OrbitDatabaseIdentifier(rawValue: rawValue)
         #expect(

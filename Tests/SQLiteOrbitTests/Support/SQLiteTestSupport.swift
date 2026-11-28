@@ -323,16 +323,5 @@
         as: String.self
       )
     }
-
-    /// The value of the pragma `name`, as a reading connection sees it.
-    ///
-    /// The pragma is read through its table-valued function, since SQLite reports a pragma such
-    /// as `journal_mode`, which can also set the mode, as one that may write.
-    func pragma<Value: TestColumnValue>(
-      _ name: String,
-      as type: Value.Type
-    ) async throws -> Value? {
-      try await self.fetchOne(sql: "SELECT * FROM pragma_\(name)", as: Value.self)
-    }
   }
 #endif

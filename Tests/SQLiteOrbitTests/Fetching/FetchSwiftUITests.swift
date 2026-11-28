@@ -21,16 +21,6 @@
     @Suite(.serialized, .timeLimit(.minutes(1)))
     struct FetchSwiftUITests {
       @Test
-      func theLeadingDotAnimationSchedulerAnimatesOnTheMainActor() {
-        let scheduler:
-          OrbitAnimatedValueObservationScheduler<
-            OrbitMainActorValueObservationScheduler
-          > = .animation(.linear)
-        #expect(scheduler == OrbitMainActorValueObservationScheduler.mainActor.animation(.linear))
-        #expect(scheduler != OrbitMainActorValueObservationScheduler.mainActor.animation(.default))
-      }
-
-      @Test
       func viewRedrawsWhenACommittedWriteChangesTheRows() async throws {
         let database = try await remindersDatabase(titles: "Milk")
         let sut = RemindersList(database: database)

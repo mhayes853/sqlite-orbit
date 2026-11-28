@@ -91,8 +91,8 @@ jobs:
           apt-get install -y --no-install-recommends libsqlite3-dev pkg-config
 
       # This downloads and links the release-hosted artifact. The rest of the test target includes
-      # cases for SQLite capabilities Turso deliberately reports as unavailable. Both suites use
-      # Structured Queries to set up and inspect their databases, so the trait is named too.
+      # cases for SQLite capabilities Turso deliberately reports as unavailable. The migrator suite
+      # keeps a test of functions registered through Structured Queries, so the trait is named too.
       - name: Test Turso compatibility
         run: |
           swift test --disable-default-traits --traits Turso,StructuredQueries \

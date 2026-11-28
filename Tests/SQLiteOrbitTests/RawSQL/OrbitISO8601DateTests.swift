@@ -169,7 +169,7 @@
     }
 
     @Test(.enabled(if: isFoundationAsPinned))
-    func textReadsAsFoundationsISO8601FormatStyleReadsIt() {
+    func randomAndEditedTextReadsAsFoundationsISO8601FormatStyleReadsIt() {
       var generator = SplitMix64(seed: 0x5EED)
       for _ in 0..<100_000 {
         let text = generator.timestampText()
@@ -186,12 +186,9 @@
           return
         }
       }
-    }
 
-    // Every byte of the usual spellings replaced with every other byte, which reaches each check
-    // the hand-written parser makes.
-    @Test(.enabled(if: isFoundationAsPinned))
-    func editedTextReadsAsFoundationsISO8601FormatStyleReadsIt() {
+      // Every byte of the usual spellings replaced with every other byte, which reaches each
+      // check the hand-written parser makes.
       let texts = [
         "2018-04-20 14:47:12", "2018-04-20 14:47:12.345", "2018-04-20 14:47:12.123456789"
       ]

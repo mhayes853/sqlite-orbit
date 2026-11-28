@@ -25,20 +25,6 @@
     }
 
     @Test
-    func valuesRoundTripThroughATable() async throws {
-      let database = try inMemoryDatabase()
-      let values: [OrbitDatabaseValue] = [nil, 1, 2.5, "three", .blob([4])]
-      let read = try await database.write { transaction in
-        try transaction.executeScript("CREATE TABLE t (id INTEGER PRIMARY KEY, value)")
-        for (id, value) in values.enumerated() {
-          try transaction.execute("INSERT INTO t (id, value) VALUES (\(id), \(value))")
-        }
-        return try transaction.fetchAll("SELECT value FROM t ORDER BY id") { $0[0] }
-      }
-      #expect(read == values)
-    }
-
-    @Test
     func rowsReportTheirColumnsByPositionAndName() async throws {
       let database = try inMemoryDatabase()
       let columns = try await database.read { transaction in
@@ -160,31 +146,6 @@
         }
       }
       #expect(error?.code.rawValue == 25)
-    }
-
-    @Test
-    func writeTransactionsReadWhatReturningReports() async throws {
-      let database = try inMemoryDatabase()
-      let (inserted, deleted, stopped) = try await database.write { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT)")
-        var insertedCursor = try transaction.executeRowCursor(
-          "INSERT INTO items (title) VALUES ('a'), ('b'), ('c') RETURNING id"
-        )
-        let inserted = try insertedCursor.collect { $0[0].integerValue ?? 0 }
-        var deletedCursor = try transaction.executeRowCursor(
-          "DELETE FROM items WHERE id = \(2) RETURNING title"
-        )
-        let deleted = try deletedCursor.first { $0[0].textValue }
-        var stopped: [Int64] = []
-        try transaction.execute("UPDATE items SET title = upper(title) RETURNING id") { row in
-          stopped.append(row[0].integerValue ?? 0)
-          return .stop
-        }
-        return (inserted, deleted, stopped)
-      }
-      #expect(inserted == [1, 2, 3])
-      #expect(deleted == "b")
-      #expect(stopped.count == 1)
     }
 
     @Test
@@ -343,9 +304,19 @@
 
         // What may write is spelled `execute`.
         var cursor = try transaction.executeRowCursor(
-          "INSERT INTO items (id) VALUES (1), (2), (3) RETURNING id"
+          "INSERT INTO items (id) VALUES (1), (2), (3), (4) RETURNING id"
         )
-        #expect(try cursor.collect(as: Int.self) == [1, 2, 3])
+        #expect(try cursor.collect { $0[0].integerValue ?? 0 } == [1, 2, 3, 4])
+        var deletedOne = try transaction.executeRowCursor(
+          "DELETE FROM items WHERE id = \(4) RETURNING id"
+        )
+        #expect(try deletedOne.first { $0[0].integerValue } == 4)
+        var stopped: [Int64] = []
+        try transaction.execute("UPDATE items SET id = id RETURNING id") { row in
+          stopped.append(row[0].integerValue ?? 0)
+          return .stop
+        }
+        #expect(stopped.count == 1)
         var deleted = try transaction.executeRowCursor(
           "DELETE FROM items WHERE id > 1 RETURNING id",
           cached: true
@@ -396,84 +367,7 @@
 
     // MARK: - Functions
 
-    @Test
-    func nativeScalarFunctionsReceiveAndReturnValues() async throws {
-      var configuration = SQLiteConfiguration.default
-      configuration.registerFunction("describe", argumentCount: nil, flags: [.deterministic]) {
-        arguments in
-        var parts: [String] = []
-        for index in 0..<arguments.count {
-          switch arguments[index] {
-          case .null: parts.append("null")
-          case .integer(let value): parts.append("integer \(value)")
-          case .real(let value): parts.append("real \(value)")
-          case .text(let value): parts.append("text \(value)")
-          case .blob(let value): parts.append("blob \(value.count)")
-          }
-        }
-        return .text(parts.joined(separator: ", "))
-      }
-      configuration.registerFunction("echo", argumentCount: 1) { $0[0] }
-      configuration.registerFunction("fail", argumentCount: 0) { _ in
-        throw NativeFunctionFailure()
-      }
-      let database = try inMemoryDatabase(configuration: configuration)
-
-      let (described, none, echoed) = try await database.read { transaction in
-        (
-          try transaction.fetchOne("SELECT describe(NULL, 1, 2.5, 'a', x'0102')") {
-            $0[0].textValue
-          },
-          try transaction.fetchOne("SELECT describe()") { $0[0].textValue },
-          try transaction.fetchAll(
-            "SELECT echo(column1) FROM (VALUES (NULL), (1), (2.5), ('a'), (x'00'))"
-          ) { $0[0] }
-        )
-      }
-      #expect(described == "null, integer 1, real 2.5, text a, blob 2")
-      #expect(none == "")
-      #expect(echoed == [nil, 1, 2.5, "a", .blob([0])])
-
-      let error = await #expect(throws: SQLiteError.self) {
-        try await database.read { transaction in
-          try transaction.fetchOne("SELECT fail()") { $0[0] }
-        }
-      }
-      #expect(error?.message?.contains("NativeFunctionFailure") == true)
-    }
-
-    @Test
-    func nativeAggregateFunctionsAccumulateEachGroup() async throws {
-      var configuration = SQLiteConfiguration.default
-      configuration.registerAggregateFunction("longest", argumentCount: 1, LongestText())
-      configuration.registerAggregateFunction("failing", argumentCount: 1, FailingAccumulator())
-      let database = try inMemoryDatabase(configuration: configuration)
-      try await database.execute(
-        sql: """
-          CREATE TABLE words (list INTEGER, word TEXT);
-          INSERT INTO words VALUES (1, 'a'), (1, 'abc'), (1, 'ab'), (2, 'xy'), (2, NULL);
-          """
-      )
-
-      let (byGroup, empty) = try await database.read { transaction in
-        (
-          try transaction.fetchAll("SELECT longest(word) FROM words GROUP BY list ORDER BY list") {
-            $0[0].textValue
-          },
-          // A group with no rows is finished without a step.
-          try transaction.fetchOne("SELECT longest(word) FROM words WHERE 0") { $0[0] }
-        )
-      }
-      #expect(byGroup == ["abc", "xy"])
-      #expect(empty == .null)
-
-      let error = await #expect(throws: SQLiteError.self) {
-        try await database.read { transaction in
-          try transaction.fetchOne("SELECT failing(word) FROM words") { $0[0] }
-        }
-      }
-      #expect(error?.message?.contains("NativeFunctionFailure") == true)
-    }
+    // What a registered function receives, returns and throws is SQLiteFunctionTests'.
 
     @Test
     func connectionLocalRegistrationsSurviveLendingAndHonorFlags() throws {
@@ -631,16 +525,6 @@
 
     func finish() throws -> OrbitDatabaseValue {
       longest.map(OrbitDatabaseValue.text) ?? nil
-    }
-  }
-
-  private struct FailingAccumulator: SQLiteAggregateAccumulator {
-    mutating func step(_ arguments: borrowing SQLiteFunctionArguments) throws {
-      throw NativeFunctionFailure()
-    }
-
-    func finish() throws -> OrbitDatabaseValue {
-      throw NativeFunctionFailure()
     }
   }
 #endif

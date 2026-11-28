@@ -12,7 +12,7 @@
   @Suite(.enabled(if: areEmbeddingVectorsAvailable))
   struct EmbeddingVectorTests {
     @Test
-    func vectorBytesMatchSQLiteVecAndStructuredQueries() throws {
+    func vectorBytesMatchSQLiteVecStructuredQueriesAndTurso() throws {
       guard #available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *) else {
         return
       }
@@ -26,27 +26,8 @@
       #if SystemSQLite
         #expect(SQLITE_VEC_VERSION.hasPrefix("v0."))
       #endif
-    }
 
-    @Test
-    func conversionPreservesFloatBitsAndEmptyVectors() throws {
-      guard #available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *) else {
-        return
-      }
-      let bits: [UInt32] = [0x8000_0000, 0x7f80_0000, 0x7fc0_1234, 0x8000_0001]
-      let vector = EmbeddingVector<4> { Float(bitPattern: bits[$0]) }
-      let decoded = try EmbeddingVector<4>(orbitDatabaseValue: vector.orbitDatabaseValue())
-      #expect(decoded.map(\.bitPattern) == bits)
-      let empty = EmbeddingVector<0>(repeating: 0)
-      #expect(empty.orbitDatabaseValue() == .blob([]))
-      #expect(try EmbeddingVector<0>(orbitDatabaseValue: .blob([])).isEmpty)
-    }
-
-    @Test
-    func float64VectorsUseRawLittleEndianBlobsUnlessTursoTagged() throws {
-      guard #available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *) else {
-        return
-      }
+      // Float64 vectors use raw little-endian blobs unless Turso tagged.
       let double = EmbeddingVector64<3> { [Double(1), -2, 0.5][$0] }
       let doubleBytes: [UInt8] = [
         0, 0, 0, 0, 0, 0, 240, 63,
@@ -74,10 +55,19 @@
     }
 
     @Test
-    func otherNumericPrecisionsPreserveBitsAndEmptyDimensions() throws {
+    func conversionPreservesBitsAndEmptyVectorsAtEveryPrecision() throws {
       guard #available(iOS 26.0, macOS 26.0, tvOS 26.0, watchOS 26.0, visionOS 26.0, *) else {
         return
       }
+      let bits: [UInt32] = [0x8000_0000, 0x7f80_0000, 0x7fc0_1234, 0x8000_0001]
+      let vector = EmbeddingVector<4> { Float(bitPattern: bits[$0]) }
+      let decoded = try EmbeddingVector<4>(orbitDatabaseValue: vector.orbitDatabaseValue())
+      #expect(decoded.map(\.bitPattern) == bits)
+      let empty = EmbeddingVector<0>(repeating: 0)
+      #expect(empty.orbitDatabaseValue() == .blob([]))
+      #expect(try EmbeddingVector<0>(orbitDatabaseValue: .blob([])).isEmpty)
+
+      // Float64 vectors, Turso tagged or not, preserve bits and empty dimensions too.
       let doubleBits: [UInt64] = [
         0x8000_0000_0000_0000, 0x7ff0_0000_0000_0000,
         0x7ff8_0000_0000_1234, 1

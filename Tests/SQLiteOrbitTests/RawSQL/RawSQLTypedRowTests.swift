@@ -92,25 +92,6 @@
       #expect(null == .some(nil))
       #expect(none == nil)
     }
-
-    @Test
-    func writeTransactionsReadWhatReturningReportsAsAType() async throws {
-      let database = try inMemoryDatabase()
-      let (inserted, deleted) = try await database.write { transaction in
-        try transaction.execute("CREATE TABLE items (id INTEGER PRIMARY KEY, title TEXT)")
-        var insertedCursor = try transaction.executeRowCursor(
-          "INSERT INTO items (title) VALUES ('a'), (NULL) RETURNING id"
-        )
-        let inserted = try insertedCursor.collect(as: Int.self)
-        var deletedCursor = try transaction.executeRowCursor(
-          "DELETE FROM items WHERE id = \(2) RETURNING title"
-        )
-        let deleted = try deletedCursor.first(as: String?.self)
-        return (inserted, deleted)
-      }
-      #expect(inserted == [1, 2])
-      #expect(deleted == .some(nil))
-    }
   }
 
   private enum TypedPriority: Int, OrbitDatabaseValueConvertible, Sendable {

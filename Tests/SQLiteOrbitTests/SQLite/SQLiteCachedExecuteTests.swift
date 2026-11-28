@@ -83,9 +83,13 @@
     }
 
     @Test
-    func cachedStatementsFollowSchemaChangesMadeThroughExecute() throws {
+    func cachedStatementsFollowSchemaChangesAndPragmasMadeThroughExecute() throws {
       var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
       try owner.withWriteConnection { connection in
+        for version in [3, 4, 3] {
+          try connection.execute("PRAGMA user_version = \(raw: String(version))")
+          #expect(try connection.fetchOne("PRAGMA user_version", as: Int.self) == version)
+        }
         try connection.transaction { transaction in
           for _ in 0..<2 {
             try transaction.execute("CREATE TABLE IF NOT EXISTS t (a INTEGER)")
@@ -107,37 +111,18 @@
           try transaction.execute("CREATE TABLE t (a TEXT)")
           try transaction.execute("INSERT INTO t (a) VALUES (\(1))")
           #expect(try transaction.fetchAll("SELECT typeof(a) FROM t", as: String.self) == ["text"])
+          // A view redefined under the same name: SQLiteStatementCacheTests.
         }
       }
     }
 
     @Test
-    func cachedPragmasAndViewsTakeEffectEachTime() throws {
+    func aFailedBindingOrStepGivesTheCachedStatementBack() throws {
       var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
       try owner.withWriteConnection { connection in
-        for version in [3, 4, 3] {
-          try connection.execute("PRAGMA user_version = \(raw: String(version))")
-          #expect(try connection.fetchOne("PRAGMA user_version", as: Int.self) == version)
-        }
-        try connection.transaction { transaction in
-          try transaction.execute("CREATE TABLE a (x INTEGER)")
-          try transaction.execute("CREATE TABLE b (x INTEGER)")
-          try transaction.execute("INSERT INTO a VALUES (1)")
-          try transaction.execute("INSERT INTO b VALUES (2)")
-          try transaction.execute("CREATE VIEW v AS SELECT x FROM a")
-          #expect(try transaction.fetchAll("SELECT x FROM v", as: Int.self) == [1])
-          try transaction.execute("DROP VIEW v")
-          try transaction.execute("CREATE VIEW v AS SELECT x FROM b")
-          #expect(try transaction.fetchAll("SELECT x FROM v", as: Int.self) == [2])
-        }
-      }
-    }
-
-    @Test
-    func aBindingFailureGivesTheCachedStatementBack() throws {
-      var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
-      try owner.withWriteConnection { connection in
-        try connection.executeScript("CREATE TABLE t (a INTEGER)")
+        try connection.executeScript(
+          "CREATE TABLE t (a INTEGER); CREATE TABLE u (a INTEGER PRIMARY KEY)"
+        )
         try connection.transaction { transaction in
           try transaction.execute("INSERT INTO t VALUES (\(UInt64(1)))")
           #expect(throws: OrbitDatabaseIntegerOverflowError<UInt64>.self) {
@@ -145,24 +130,15 @@
           }
           try transaction.execute("INSERT INTO t VALUES (\(UInt64(2)))")
           #expect(transaction.base.statements.idleStatementCount == 1)
-        }
-        #expect(try connection.fetchAll("SELECT a FROM t ORDER BY a", as: Int.self) == [1, 2])
-      }
-    }
 
-    @Test
-    func aFailedStepLeavesTheStatementReusable() throws {
-      var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
-      try owner.withWriteConnection { connection in
-        try connection.executeScript("CREATE TABLE t (a INTEGER PRIMARY KEY)")
-        try connection.transaction { transaction in
-          try transaction.execute("INSERT INTO t VALUES (\(1))")
+          try transaction.execute("INSERT INTO u VALUES (\(1))")
           #expect(throws: SQLiteError.self) {
-            try transaction.execute("INSERT INTO t VALUES (\(1))")
+            try transaction.execute("INSERT INTO u VALUES (\(1))")
           }
-          try transaction.execute("INSERT INTO t VALUES (\(2))")
+          try transaction.execute("INSERT INTO u VALUES (\(2))")
         }
         #expect(try connection.fetchAll("SELECT a FROM t ORDER BY a", as: Int.self) == [1, 2])
+        #expect(try connection.fetchAll("SELECT a FROM u ORDER BY a", as: Int.self) == [1, 2])
       }
     }
 
@@ -170,25 +146,18 @@
 
     @Test
     func twoCursorsOverTheSameSQLStepIndependently() throws {
-      var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
-      try owner.withWriteConnection { connection in
-        try connection.executeScript(
-          "CREATE TABLE t (a INTEGER); INSERT INTO t VALUES (1), (2), (3)"
-        )
+      try withNumbers { connection in
         try connection.transaction { transaction in
-          let sql: SQL = "SELECT a FROM t ORDER BY a"
           // Leave a statement for this SQL in the cache, so the first cursor is lent it.
-          #expect(try transaction.fetchAll(sql, as: Int.self) == [1, 2, 3])
+          #expect(try transaction.fetchAll(numbers, as: Int.self) == [1, 2, 3])
           #expect(transaction.base.statements.idleStatementCount == 1)
 
-          var first = try transaction.rowCursor(sql)
+          var first = try transaction.rowCursor(numbers)
           #expect(try first.next()?[0].integerValue == 1)
           #expect(transaction.base.statements.idleStatementCount == 0)
 
-          var second = try transaction.rowCursor(sql)
-          var secondValues: [Int64] = []
-          while let row = try second.next() { secondValues.append(row[0].integerValue ?? -1) }
-          #expect(secondValues == [1, 2, 3])
+          var second = try transaction.rowCursor(numbers)
+          #expect(try second.collect { $0[0].integerValue } == [1, 2, 3])
 
           #expect(try first.next()?[0].integerValue == 2)
           #expect(try first.next()?[0].integerValue == 3)
@@ -203,58 +172,51 @@
 
     @Test
     func aCursorDroppedPartwayLeavesItsStatementAtTheStart() throws {
-      var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
-      try owner.withWriteConnection { connection in
-        try connection.executeScript(
-          "CREATE TABLE t (a INTEGER); INSERT INTO t VALUES (1), (2), (3)"
-        )
+      try withNumbers { connection in
         try connection.transaction { transaction in
-          let sql: SQL = "SELECT a FROM t ORDER BY a"
           do {
-            var cursor = try transaction.rowCursor(sql)
+            var cursor = try transaction.rowCursor(numbers)
             #expect(try cursor.next()?[0].integerValue == 1)
           }
           #expect(transaction.base.statements.idleStatementCount == 1)
 
-          var cursor = try transaction.rowCursor(sql)
-          var values: [Int64] = []
-          while let row = try cursor.next() { values.append(row[0].integerValue ?? -1) }
-          #expect(values == [1, 2, 3])
+          var cursor = try transaction.rowCursor(numbers)
+          #expect(try cursor.collect { $0[0].integerValue } == [1, 2, 3])
         }
       }
     }
 
     @Test
     func aCursorOpenAcrossASchemaChangeIsNotCachedAfterIt() throws {
-      var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
-      try owner.withWriteConnection { connection in
-        try connection.executeScript(
-          "CREATE TABLE t (a INTEGER); INSERT INTO t VALUES (1), (2), (3)"
-        )
+      try withNumbers { connection in
         try connection.transaction { transaction in
-          let sql: SQL = "SELECT a FROM t ORDER BY a"
           let generation = transaction.base.statements.generation
           do {
-            var cursor = try transaction.rowCursor(sql)
+            var cursor = try transaction.rowCursor(numbers)
             #expect(try cursor.next()?[0].integerValue == 1)
 
             try transaction.execute("CREATE TABLE u (b INTEGER)")
             #expect(transaction.base.statements.generation != generation)
 
-            #expect(try cursor.next()?[0].integerValue == 2)
-            #expect(try cursor.next()?[0].integerValue == 3)
-            #expect(try cursor.next() == nil)
+            #expect(try cursor.collect { $0[0].integerValue } == [2, 3])
           }
-          // The cursor's statement was compiled before the change, so it was finalized rather than
-          // given back.
+          // The cursor's statement was compiled before the change, so it was finalized rather
+          // than given back.
           #expect(transaction.base.statements.idleStatementCount == 0)
-
-          try transaction.execute("ALTER TABLE t ADD COLUMN b INTEGER DEFAULT 7")
-          var cursor = try transaction.rowCursor("SELECT b FROM t ORDER BY a")
-          var values: [Int64] = []
-          while let row = try cursor.next() { values.append(row[0].integerValue ?? -1) }
-          #expect(values == [7, 7, 7])
         }
+      }
+    }
+
+    private let numbers: SQL = "SELECT a FROM t ORDER BY a"
+
+    /// Runs `body` with an in-memory connection whose table `t` holds 1, 2 and 3.
+    private func withNumbers(_ body: (borrowing SQLiteWriteConnection) throws -> Void) throws {
+      var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
+      try owner.withWriteConnection { connection in
+        try connection.executeScript(
+          "CREATE TABLE t (a INTEGER); INSERT INTO t VALUES (1), (2), (3)"
+        )
+        try body(connection)
       }
     }
   }

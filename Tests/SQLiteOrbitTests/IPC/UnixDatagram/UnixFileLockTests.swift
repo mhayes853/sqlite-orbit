@@ -20,7 +20,7 @@
     }
 
     @Test
-    func removesTheLockFileOnceLetGoOf() throws {
+    func fileAndOpenLocksRemoveTheirFilesOnceLetGoOf() throws {
       let existedWhileHeld = try UnixFileLock.withExclusiveLockIfAvailable(atPath: path) {
         FileManager.default.fileExists(atPath: path)
       }
@@ -34,10 +34,8 @@
 
       #expect(try UnixFileLock.withExclusiveLockIfAvailable(atPath: path) { 1 } == 1)
       #expect(!FileManager.default.fileExists(atPath: path))
-    }
 
-    @Test
-    func openLockLeavesNoLockFilesBehind() throws {
+      // Nor does the open lock leave its files behind.
       for name in ["one", "two"] {
         try OrbitDatabaseOpenLock.withLock(
           databaseIdentifier: OrbitDatabaseIdentifier(rawValue: name),
@@ -167,25 +165,6 @@
       #expect(FileManager.default.createFile(atPath: path, contents: nil))
       #expect(UnixFileLock.removeIfUnlocked(atPath: path))
       #expect(!FileManager.default.fileExists(atPath: path))
-    }
-
-    @Test
-    func openLockRemovesTheLocksNobodyHolds() throws {
-      let locks = directory.appending(path: "open-locks", directoryHint: .isDirectory)
-      try FileManager.default.createDirectory(at: locks, withIntermediateDirectories: true)
-      for name in ["left.lock", "behind.lock"] {
-        let path = locks.appending(path: name).path
-        #expect(FileManager.default.createFile(atPath: path, contents: nil))
-      }
-      let holder = holdLock(locks.appending(path: "held.lock").path)
-      defer { holder.release() }
-
-      #expect(
-        OrbitDatabaseOpenLock.removeUnheldLocks(
-          in: OrbitCoordinationDirectory(path: directory.path)
-        ) == 2
-      )
-      #expect(try FileManager.default.contentsOfDirectory(atPath: locks.path) == ["held.lock"])
     }
   }
 

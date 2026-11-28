@@ -28,12 +28,18 @@
       }
       try coordination.writeMarker("live", in: "k1")
       try coordination.writeMarker("self", in: "k2")
+      // A database directory that was empty already goes too, while those still holding a live
+      // endpoint's marker stay.
+      try FileManager.default.createDirectory(
+        at: coordination.databases.appending(path: "empty"),
+        withIntermediateDirectories: true
+      )
 
       let summary = coordination.sweep()
 
       #expect(summary?.socketCount == 1)
       #expect(summary?.markerCount == 3)
-      #expect(summary?.databaseDirectoryCount == 1)
+      #expect(summary?.databaseDirectoryCount == 2)
       #expect(try coordination.sockets() == ["live.sock", "self.sock"])
       #expect(try coordination.markers() == ["k1": ["live"], "k2": ["self"]])
       withExtendedLifetime(live) {}
@@ -76,22 +82,6 @@
 
       #expect(immediate?.temporarySocketCount == 1)
       #expect(try coordination.sockets() == [".live.sock"])
-      withExtendedLifetime(live) {}
-    }
-
-    @Test
-    func removesEmptyDatabaseDirectoriesOnly() throws {
-      let live = try coordination.bindSocket("live")
-      try coordination.writeMarker("live", in: "full")
-      try FileManager.default.createDirectory(
-        at: coordination.databases.appending(path: "empty"),
-        withIntermediateDirectories: true
-      )
-
-      let summary = coordination.sweep()
-
-      #expect(summary?.databaseDirectoryCount == 1)
-      #expect(try coordination.markers() == ["full": ["live"]])
       withExtendedLifetime(live) {}
     }
 

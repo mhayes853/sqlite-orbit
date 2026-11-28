@@ -87,36 +87,6 @@
       #expect(count == 2)
     }
 
-    @Test
-    func rawSQLExecuteInReadAccessIsStillReadOnly() async throws {
-      let database = try SQLiteQueue(path: ":memory:")
-      try await database.write { transaction in
-        try #sql(
-          "CREATE TABLE query_first_items (id INTEGER PRIMARY KEY, quantity INTEGER NOT NULL)"
-        )
-        .execute(transaction)
-        try QueryFirstItem.insert { QueryFirstItem(id: 1, quantity: 2) }.execute(transaction)
-      }
-
-      // A structured mutation does not compile here because its `execute` overload requires an
-      // `OrbitDatabaseWriteTransaction`:
-      // try QueryFirstItem.update { $0.quantity += 1 }.execute(transaction)
-      let error = await #expect(throws: SQLiteError.self) {
-        try await database.read { transaction in
-          try #sql(
-            "UPDATE query_first_items SET quantity = quantity + 1"
-          )
-          .execute(transaction)
-        }
-      }
-      #expect(error?.primaryCode == .readOnly)
-
-      let quantity = try await database.read {
-        try QueryFirstItem.select(\.quantity).fetchOne($0)
-      }
-      #expect(quantity == 2)
-    }
-
     @Table("query_first_items")
     private struct QueryFirstItem: Equatable, Sendable {
       let id: Int

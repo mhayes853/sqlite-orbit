@@ -17,11 +17,19 @@ func unixDatagramWireProtocolHasStableVersionOneEncoding() throws {
 }
 
 @Test
-func unixDatagramWireProtocolRoundTripsEveryRegionShape() throws {
+func unixDatagramWireProtocolRoundTripsEveryRegionShapeCanonically() throws {
   for region in databaseIPCRegions {
     let message = databaseIPCMessage(region: region)
     #expect(try decodeDatabaseIPCMessages(UnixDatagramWireProtocol.encode(message)) == [message])
   }
+
+  // A union encodes the same whichever order it was formed in.
+  let first = OrbitDatabaseRegion(column: "first", in: "items")
+  let second = OrbitDatabaseRegion(column: "second", in: "items")
+  #expect(
+    try UnixDatagramWireProtocol.encode(databaseIPCMessage(region: first.union(second)))
+      == UnixDatagramWireProtocol.encode(databaseIPCMessage(region: second.union(first)))
+  )
 }
 
 @Test
@@ -62,17 +70,6 @@ func unixDatagramWireProtocolSharesStringsAcrossABatch() throws {
   #expect(
     try decodeDatabaseIPCMessages(encoded)
       == [title, notes, title.union(notes), .fullDatabase].map { databaseIPCMessage(region: $0) }
-  )
-}
-
-@Test
-func unixDatagramWireProtocolEncodingIsCanonical() throws {
-  let first = OrbitDatabaseRegion(column: "first", in: "items")
-  let second = OrbitDatabaseRegion(column: "second", in: "items")
-
-  #expect(
-    try UnixDatagramWireProtocol.encode(databaseIPCMessage(region: first.union(second)))
-      == UnixDatagramWireProtocol.encode(databaseIPCMessage(region: second.union(first)))
   )
 }
 
@@ -218,7 +215,7 @@ func unixDatagramWireProtocolBroadensOversizedRegionsAndRefusesWhatItCannot() th
 }
 
 @Test
-func unixDatagramMarkersRoundTripEveryRegionShape() throws {
+func unixDatagramMarkersRoundTripEveryRegionShapeAndRejectMalformedContents() throws {
   for region in databaseIPCRegions {
     let encoded = UnixDatagramWireProtocol.encodeMarker(region)
     #expect(try decodeDatabaseIPCMarker(encoded) == region)
@@ -231,10 +228,8 @@ func unixDatagramMarkersRoundTripEveryRegionShape() throws {
       0, 0, 1, 0, 0, 0, 1, 0, 0, 1, 0, 2
     ]
   )
-}
 
-@Test
-func unixDatagramMarkersRejectMalformedContents() throws {
+  // Every truncation of a marker, and trailing bytes after one, are refused.
   let encoded = UnixDatagramWireProtocol.encodeMarker(
     OrbitDatabaseRegion(column: "title", in: "items")
   )

@@ -34,34 +34,7 @@
     }
 
     @Test
-    func nativeDriverExposesTransactionScopedCursors() async throws {
-      let database = try inMemoryDatabase()
-
-      let readValues = try await database.read { transaction in
-        var cursor = try #sql("SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3", as: Int.self)
-          .fetchCursor(transaction)
-        var values: [Int] = []
-        while let value = try cursor.next() {
-          values.append(value)
-        }
-        return values
-      }
-
-      let writeValues = try await database.write { transaction in
-        var cursor = try #sql("SELECT 4 UNION ALL SELECT 5", as: Int.self).fetchCursor(transaction)
-        var values: [Int] = []
-        while let value = try cursor.next() {
-          values.append(value)
-        }
-        return values
-      }
-
-      #expect(readValues == [1, 2, 3])
-      #expect(writeValues == [4, 5])
-    }
-
-    @Test
-    func nativeDriverRoundTripsDateAndUUIDBindings() async throws {
+    func nativeDriverRoundTripsAndDecodesDatesAndUUIDs() async throws {
       let database = try inMemoryDatabase()
       let value = SpecialValue(
         id: 1,
@@ -88,24 +61,19 @@
         try SpecialValue.all.fetchOne(transaction)
       }
       #expect(decoded == value)
-    }
 
-    @Test
-    func nativeDriverDecodesDatesWithoutFractionsAndUppercaseUUIDs() async throws {
-      let database = try inMemoryDatabase()
+      // Dates without fractions and uppercase UUIDs decode too.
       let timestamp = "2024-01-02 03:04:05"
       let uuid = "DEADBEEF-CAFE-BABE-0123-456789ABCDEF"
-
-      let decoded: (Date, UUID)? = try await database.read { transaction in
+      let other: (Date, UUID)? = try await database.read { transaction in
         try #sql(
           "SELECT \(timestamp, as: String.self), \(uuid, as: String.self)",
           as: (Date, UUID).self
         )
         .fetchOne(transaction)
       }
-
-      #expect(decoded?.0.timeIntervalSince1970 == 1_704_164_645)
-      #expect(decoded?.1 == UUID(uuidString: uuid))
+      #expect(other?.0.timeIntervalSince1970 == 1_704_164_645)
+      #expect(other?.1 == UUID(uuidString: uuid))
     }
 
     @Test
@@ -113,9 +81,7 @@
       let database = try inMemoryDatabase()
 
       let decoded: [(Int, String)] = try await database.read { transaction in
-        var cursor = try transaction.rowCursor(
-          SQL(fragment: #sql("SELECT 1, 'one' UNION ALL SELECT 2, 'two'", as: Void.self).query)
-        )
+        var cursor = try transaction.rowCursor("SELECT 1, 'one' UNION ALL SELECT 2, 'two'")
         var decoded: [(Int, String)] = []
         while var row = try cursor.next() {
           // Two separate decodes on one row must advance through its columns rather than
@@ -132,6 +98,19 @@
       #expect(decoded[0].1 == "one")
       #expect(decoded[1].0 == 2)
       #expect(decoded[1].1 == "two")
+
+      // Reals, blobs and unsigned integers each decode through their own entry point.
+      let others = try await database.read { transaction in
+        try #sql("SELECT 2.5, x'0102', 7", as: (Double, [UInt8], UInt64).self).fetchOne(transaction)
+      }
+      #expect(others?.0 == 2.5)
+      #expect(others?.1 == [1, 2])
+      #expect(others?.2 == 7)
+      await #expect(throws: (any Error).self) {
+        try await database.read { transaction in
+          try #sql("SELECT -1", as: UInt64.self).fetchOne(transaction)
+        }
+      }
     }
 
     @Table

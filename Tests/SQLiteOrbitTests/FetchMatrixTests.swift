@@ -89,7 +89,7 @@
     }
 
     @Test
-    func selectStatementsReportTheirCount() async throws {
+    func selectStatementsCountAndIterateTheirRows() async throws {
       let database = try await seededDatabase()
 
       let all = try await database.read { transaction in
@@ -101,6 +101,38 @@
 
       #expect(all == 3)
       #expect(filtered == 2)
+
+      let titles = try await database.read { transaction in
+        var cursor = try Reminder.where { $0.listID.eq(1) }.order(by: \.id).fetchCursor(transaction)
+        var titles: [String] = []
+        while let reminder = try cursor.next() {
+          titles.append(reminder.title)
+        }
+        return titles
+      }
+      #expect(titles == ["Milk", "Eggs"])
+    }
+
+    @Test
+    func readTransactionsExecuteStatementsThatCannotWrite() async throws {
+      let database = try await seededDatabase()
+
+      try await database.read { transaction in
+        try Reminder.where { $0.listID.eq(1) }.execute(transaction)
+        try #sql("SELECT count(*) FROM reminders").execute(transaction)
+      }
+
+      // Raw SQL is checked when it is prepared, so a write is refused before it runs.
+      let error = await #expect(throws: SQLiteError.self) {
+        try await database.read { transaction in
+          try #sql("DELETE FROM reminders").execute(transaction)
+        }
+      }
+      #expect(error?.primaryCode == .readOnly)
+      let count = try await database.read { transaction in
+        try Reminder.all.fetchCount(transaction)
+      }
+      #expect(count == 3)
     }
 
     @Test

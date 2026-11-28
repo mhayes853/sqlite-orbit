@@ -1,14 +1,344 @@
-#if StructuredQueries
-  import StructuredQueriesSQLite
+#if BuiltInSQLite
+  import Foundation
+  import Testing
 
-  #if BuiltInSQLite
-    import Foundation
-    import Testing
+  @testable import SQLiteOrbit
 
-    @testable import SQLiteOrbit
+  #if StructuredQueries
+    import StructuredQueriesSQLite
+  #endif
 
+  // `repeated(text, count)`, which repeats its text.
+  private let repeatText:
+    @Sendable (borrowing SQLiteFunctionArguments) throws -> OrbitDatabaseValue = {
+      arguments in
+      guard case .text(let text) = arguments[0], case .integer(let count) = arguments[1] else {
+        throw FunctionFailure()
+      }
+      return .text(String(repeating: text, count: Int(count)))
+    }
+
+  private func register(
+    _ configuration: inout SQLiteConfiguration,
+    repeated: Bool = false,
+    longest: Bool = false
+  ) {
+    if repeated {
+      configuration.registerFunction(
+        "repeated",
+        argumentCount: 2,
+        flags: [.deterministic],
+        repeatText
+      )
+    }
+    if longest {
+      configuration.registerAggregateFunction("longest", argumentCount: 1, LongestText())
+    }
+  }
+
+  /// Creates `notes` and fills it with a title of each of the lengths `lengths`.
+  private func seedNotes(_ database: some OrbitDatabaseWriter, lengths: [Int]) async throws {
+    try await database.write { transaction in
+      try transaction.execute("CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL)")
+      for (id, length) in lengths.enumerated() {
+        try transaction.execute(
+          "INSERT INTO notes VALUES (\(id + 1), \(String(repeating: "x", count: length)))"
+        )
+      }
+    }
+  }
+
+  @Test
+  func scalarAndAggregateFunctionsRunOnEveryConnectionAPoolOpens() async throws {
+    var configuration = SQLiteConfiguration.default
+    register(&configuration, repeated: true, longest: true)
+
+    try await withPooledDatabase(configuration: configuration) { database in
+      try await seedNotes(database, lengths: [2, 4, 3])
+
+      let scalar = try await database.fetchAll(
+        sql: "SELECT repeated(title, 3) FROM notes WHERE id = 1",
+        as: String.self
+      )
+      #expect(scalar == ["xxxxxx"])
+
+      // Force the pool past its first reader. A function installed on one connection only would
+      // fail here with "no such function".
+      let aggregates = try await concurrentReads(8, of: database) { transaction in
+        try transaction.fetchOne("SELECT longest(title) FROM notes", as: String.self)
+      }
+      #expect(aggregates.allSatisfy { $0 == "xxxx" })
+    }
+  }
+
+  @Test
+  func functionsReceiveEveryStorageClassAndReturnValues() async throws {
+    var configuration = SQLiteConfiguration.default
+    configuration.registerFunction("describe", argumentCount: nil, flags: [.deterministic]) {
+      arguments in
+      var parts: [String] = []
+      for index in 0..<arguments.count {
+        switch arguments[index] {
+        case .null: parts.append("null")
+        case .integer(let value): parts.append("integer \(value)")
+        case .real(let value): parts.append("real \(value)")
+        case .text(let value): parts.append("text \(value)")
+        case .blob(let value): parts.append("blob \(value.count)")
+        }
+      }
+      return .text(parts.joined(separator: ", "))
+    }
+    configuration.registerFunction("echo", argumentCount: 1) { $0[0] }
+    let database = try inMemoryDatabase(configuration: configuration)
+
+    let (described, none, echoed, emptyBlob) = try await database.read { transaction in
+      (
+        // A zero-length blob has no buffer behind it, and must still be read.
+        try transaction.fetchOne("SELECT describe(NULL, 1, 2.5, 'a', x'0102', x'')") {
+          $0[0].textValue
+        },
+        try transaction.fetchOne("SELECT describe()") { $0[0].textValue },
+        try transaction.fetchAll(
+          "SELECT echo(column1) FROM (VALUES (NULL), (1), (2.5), ('a'), (x'00'))"
+        ) { $0[0] },
+        // An empty blob result stays a blob rather than becoming NULL.
+        try transaction.fetchOne("SELECT typeof(echo(x''))", as: String.self)
+      )
+    }
+    #expect(described == "null, integer 1, real 2.5, text a, blob 2, blob 0")
+    #expect(none == "")
+    #expect(echoed == [nil, 1, 2.5, "a", .blob([0])])
+    #expect(emptyBlob == "blob")
+  }
+
+  @Test(arguments: ["", "plain text", "日本語", "before\u{0}after"])
+  func functionTextRoundTripsExactly(_ text: String) async throws {
+    var configuration = SQLiteConfiguration.default
+    register(&configuration, repeated: true)
+    let database = try inMemoryDatabase(configuration: configuration)
+    let value = try await database.read { transaction in
+      try transaction.fetchOne("SELECT repeated(\(text), 2)", as: String.self)
+    }
+    #expect(value == text + text)
+  }
+
+  @Test
+  func functionFailuresBecomeStatementErrors() async throws {
+    var configuration = SQLiteConfiguration.default
+    configuration.registerFunction("failing", argumentCount: 0) { _ in throw FunctionFailure() }
+    configuration.registerAggregateFunction(
+      "failingStep",
+      argumentCount: 1,
+      FailingAccumulator(failsInStep: true)
+    )
+    configuration.registerAggregateFunction(
+      "failingFinish",
+      argumentCount: 1,
+      FailingAccumulator(failsInStep: false)
+    )
+    let database = try inMemoryDatabase(configuration: configuration)
+    try await seedNotes(database, lengths: [1, 2])
+
+    for sql in [
+      "SELECT failing()", "SELECT failingStep(id) FROM notes", "SELECT failingFinish(id) FROM notes"
+    ] {
+      let error = await #expect(throws: SQLiteError.self) {
+        try await database.fetchOne(sql: sql, as: Int.self)
+      }
+      #expect(error?.message?.contains("FunctionFailure") == true)
+    }
+  }
+
+  @Test
+  func aggregatesSpanManyRowsAndManyGroups() async throws {
+    var configuration = SQLiteConfiguration.default
+    register(&configuration, longest: true)
+    let database = try inMemoryDatabase(configuration: configuration)
+    // A large group, so the aggregation holds many rows before it finishes.
+    try await seedNotes(database, lengths: (1...500).map { $0 % 40 + 1 })
+
+    let longest = try await database.fetchOne(
+      sql: "SELECT longest(title) FROM notes",
+      as: String.self
+    )
+    #expect(longest?.count == 40)
+
+    // A separate aggregation per group exercises SQLite's per-aggregation context slot.
+    let perGroup = try await database.read { transaction in
+      try transaction.fetchAll(
+        "SELECT id % 3, longest(title) FROM notes GROUP BY id % 3 ORDER BY id % 3"
+      ) { ($0[0].integerValue, $0[1].textValue) }
+    }
+    #expect(perGroup.map(\.0) == [0, 1, 2])
+    #expect(perGroup.allSatisfy { $0.1?.isEmpty == false })
+  }
+
+  @Test
+  func aggregatesOverNoRowsStillFinish() async throws {
+    var configuration = SQLiteConfiguration.default
+    register(&configuration, longest: true)
+    let database = try inMemoryDatabase(configuration: configuration)
+    try await seedNotes(database, lengths: [1])
+
+    // With no rows to step through, SQLite calls only the finalizer, which has to create the
+    // aggregation state it would otherwise have found.
+    let longest = try await database.read { transaction in
+      try transaction.fetchOne("SELECT longest(title) FROM notes WHERE 0") { $0[0] }
+    }
+    #expect(longest == .null)
+  }
+
+  #if canImport(Darwin) || os(Linux) || os(Android)
+    @Test
+    func extensionsComposeWithTheCrossProcessConfiguration() async throws {
+      try await withTestDatabaseFile("fn") { file in
+        // Function registration composes with the native cross-process defaults.
+        var configuration = SQLiteConfiguration.default
+        register(&configuration, repeated: true)
+
+        let database = try file.ipcDatabase(configuration: configuration)
+        try await seedNotes(database, lengths: [2])
+
+        let repeatedTitle = try await database.fetchOne(
+          sql: "SELECT repeated(title, 2) FROM notes",
+          as: String.self
+        )
+        #expect(repeatedTitle == "xxxx")
+
+        // The native defaults must have survived registration.
+        let trustedSchema = try await database.fetchOne(sql: "PRAGMA trusted_schema", as: Int.self)
+        #expect(trustedSchema == 0)
+      }
+    }
+  #endif
+
+  @Test
+  func manyConcurrentAggregatesMakeProgress() async throws {
+    var configuration = SQLiteConfiguration.default
+    register(&configuration, longest: true)
+
+    try await withPooledDatabase(configuration: configuration, readerCount: 16) { database in
+      try await seedNotes(database, lengths: (1...2000).map { $0 % 40 + 1 })
+
+      // Every aggregation runs on the reader thread SQLite called it from, and keeps its rows in
+      // its own aggregate context. Run many at once to hold that separation down.
+      let lengths = try await concurrentReads(128, of: database) { transaction in
+        try transaction.fetchOne("SELECT longest(title) FROM notes", as: String.self)?.count
+      }
+      #expect(lengths.count == 128)
+      #expect(lengths.allSatisfy { $0 == 40 })
+    }
+  }
+
+  @Test(.libraryHooks)
+  func functionCallbacksRunThroughTheSuppliedTableRatherThanTheLinkedBuild() async throws {
+    // A function's callbacks read arguments and write results through the build that called
+    // them, which is the whole reason a table has to carry them. Interposing those entry points
+    // is the only way to observe that the callback used this table rather than the linked SQLite.
+    let userData = Lock(0)
+    let readArguments = Lock(0)
+    let writtenResults = Lock(0)
+
+    var configuration = SQLiteConfiguration.default
+    configuration.library.scalarFunctions!.callbacks.context.userData = LibraryHooks.userData {
+      context in
+      userData.withLock { $0 += 1 }
+      return builtInTestLibrary.scalarFunctions!.callbacks.context.userData(context)
+    }
+    configuration.library.scalarFunctions!.callbacks.argument.text = LibraryHooks.argumentText {
+      value in
+      readArguments.withLock { $0 += 1 }
+      return builtInTestLibrary.scalarFunctions!.callbacks.argument.text(value)
+    }
+    configuration.library.scalarFunctions!.callbacks.result.text = LibraryHooks.resultText {
+      context,
+      text,
+      count in
+      writtenResults.withLock { $0 += 1 }
+      builtInTestLibrary.scalarFunctions!.callbacks.result.text(context, text, count)
+    }
+    register(&configuration, repeated: true)
+
+    let driver = try SQLiteQueue(path: ":memory:", configuration: configuration)
+    let value = try await driver.fetchOne(sql: "SELECT repeated('ab', 2)", as: String.self)
+
+    #expect(value == "abab")
+    #expect(userData.withLock { $0 } == 1)
+    #expect(readArguments.withLock { $0 } == 1)
+    #expect(writtenResults.withLock { $0 } == 1)
+  }
+
+  @Test(.libraryHooks)
+  func aggregateCallbacksRunThroughTheSuppliedTableRatherThanTheLinkedBuild() async throws {
+    let aggregateContexts = Lock(0)
+    var configuration = SQLiteConfiguration.default
+    configuration.library.aggregateFunctions!.context = LibraryHooks.aggregateContext {
+      context,
+      size in
+      aggregateContexts.withLock { $0 += 1 }
+      return builtInTestLibrary.aggregateFunctions!.context(context, size)
+    }
+    register(&configuration, longest: true)
+
+    let driver = try SQLiteQueue(path: ":memory:", configuration: configuration)
+    let longest = try await driver.fetchOne(
+      sql: "SELECT longest(x) FROM (SELECT 'ab' AS x UNION SELECT 'abcd')",
+      as: String.self
+    )
+
+    #expect(longest == "abcd")
+    // Two steps and one finalizer, each reaching for the same per-invocation slot.
+    #expect(aggregateContexts.withLock { $0 } == 3)
+  }
+
+  @Test
+  func functionsAreAvailableToConnectionSetupSQL() async throws {
+    var configuration = SQLiteConfiguration.default
+    register(&configuration, repeated: true)
+    configuration.setups.append(contentsOf: [
+      .sql("CREATE TABLE configured (value TEXT NOT NULL)"),
+      .sql("INSERT INTO configured VALUES (repeated('ab', 2))")
+    ])
+    let driver = try SQLiteQueue(path: ":memory:", configuration: configuration)
+
+    let values = try await driver.fetchAll(sql: "SELECT value FROM configured", as: String.self)
+    #expect(values == ["abab"])
+  }
+
+  private struct FunctionFailure: Error {}
+
+  private struct LongestText: SQLiteAggregateAccumulator {
+    var longest: String?
+
+    mutating func step(_ arguments: borrowing SQLiteFunctionArguments) throws {
+      guard let text = arguments[0].textValue else { return }
+      if text.count > longest?.count ?? -1 { longest = text }
+    }
+
+    func finish() throws -> OrbitDatabaseValue {
+      longest.map(OrbitDatabaseValue.text) ?? nil
+    }
+  }
+
+  private struct FailingAccumulator: SQLiteAggregateAccumulator {
+    let failsInStep: Bool
+
+    mutating func step(_ arguments: borrowing SQLiteFunctionArguments) throws {
+      if failsInStep { throw FunctionFailure() }
+    }
+
+    func finish() throws -> OrbitDatabaseValue {
+      throw FunctionFailure()
+    }
+  }
+
+  // MARK: - Structured Queries functions
+
+  // The functions Structured Queries declares are registered through an adapter that decodes
+  // their arguments with `SQLiteFunctionDecoder`, which is what these are about.
+  #if StructuredQueries
     @DatabaseFunction(isDeterministic: true)
-    func repeated(_ text: String, _ count: Int) -> String {
+    func repeatedTitle(_ text: String, _ count: Int) -> String {
       String(repeating: text, count: count)
     }
 
@@ -18,13 +348,8 @@
     }
 
     @DatabaseFunction
-    func rowCount(_ ids: some Sequence<Int>) -> Int {
+    func titleCount(_ ids: some Sequence<Int>) -> Int {
       ids.reduce(0) { total, _ in total + 1 }
-    }
-
-    @DatabaseFunction
-    func echoedBlob(_ bytes: [UInt8]) -> [UInt8] {
-      bytes
     }
 
     @DatabaseFunction
@@ -37,22 +362,6 @@
       _ missing: Int?
     ) -> String {
       "\(double) \(blob) \(flag) \(date.timeIntervalSince1970) \(id.uuidString) \(missing ?? -1)"
-    }
-
-    struct FunctionFailure: Error {}
-
-    // Written out rather than declared with the macro, which does not carry `throws` through for a
-    // free function that takes arguments.
-    private struct FailingFunction: ScalarDatabaseFunction {
-      typealias Input = Int
-      typealias Output = Int
-      var name: String { "failing" }
-      var argumentCount: Int? { 1 }
-      var isDeterministic: Bool { false }
-      func invoke(_ decoder: inout some QueryDecoder) throws -> QueryBinding {
-        _ = try decoder.decode(Int.self)
-        throw FunctionFailure()
-      }
     }
 
     private struct VariadicSumFunction: ScalarDatabaseFunction {
@@ -69,424 +378,80 @@
       }
     }
 
-    private struct FailingTotalFunction: AggregateDatabaseFunction {
-      typealias Input = Int
-      typealias Output = Int
-      var name: String { "failingTotal" }
-      var argumentCount: Int? { 1 }
-      var isDeterministic: Bool { false }
-      func step(_ decoder: inout some QueryDecoder) throws -> Int {
-        try decoder.decode(Int.self) ?? 0
-      }
-      func invoke(_ arguments: some Sequence<Int>) throws -> QueryBinding {
-        throw FunctionFailure()
-      }
-    }
-
-    private func seededNotes() async throws -> SQLiteQueue {
+    @Test
+    func structuredQueriesFunctionsDecodeTheirArguments() async throws {
       var configuration = SQLiteConfiguration.default
-      configuration.register(function: $repeated)
+      configuration.register(function: $repeatedTitle)
       configuration.register(function: $longestTitle)
-      configuration.register(function: $rowCount)
-      configuration.register(function: $echoedBlob)
+      configuration.register(function: $titleCount)
       configuration.register(function: $describe)
-      configuration.register(function: FailingFunction())
       configuration.register(function: VariadicSumFunction())
-      configuration.register(function: FailingTotalFunction())
-      let database = try SQLiteQueue(path: ":memory:", configuration: configuration)
-      try await database.write { transaction in
-        try #sql("CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL)", as: Void.self)
-          .execute(transaction)
-        try Note.insert {
-          Note(id: 1, title: "ab")
-          Note(id: 2, title: "abcd")
-          Note(id: 3, title: "abc")
-        }
-        .execute(transaction)
-      }
-      return database
-    }
-
-    @Test
-    func scalarAndAggregateFunctionsRunOnEveryConnectionAPoolOpens() async throws {
-      var configuration = SQLiteConfiguration.default
-      configuration.register(function: $repeated)
-      configuration.register(function: $longestTitle)
-
-      try await withPooledDatabase(configuration: configuration) { database in
-        try await database.write { transaction in
-          try #sql(
-            "CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL)",
-            as: Void.self
-          )
-          .execute(transaction)
-          try Note.insert {
-            Note(id: 1, title: "ab")
-            Note(id: 2, title: "abcd")
-            Note(id: 3, title: "abc")
-          }
-          .execute(transaction)
-        }
-
-        let scalar = try await database.read { transaction in
-          try Note.where { $0.id.eq(1) }.select { $repeated($0.title, 3) }.fetchAll(transaction)
-        }
-        #expect(scalar == ["ababab"])
-
-        // Force the pool past its first reader. A function installed on one connection only would
-        // fail here with "no such function".
-        let aggregates = try await concurrentReads(8, of: database) { transaction in
-          try Note.select { $longestTitle($0.title) }.fetchOne(transaction) ?? nil
-        }
-        #expect(aggregates.allSatisfy { $0 == "abcd" })
-      }
-    }
-
-    @Test
-    func functionArgumentsDecodeEveryStorageClass() async throws {
-      let database = try await seededNotes()
+      let database = try inMemoryDatabase(configuration: configuration)
+      try await seedNotes(database, lengths: [2, 4, 3])
       let id = UUID()
       let date = Date(timeIntervalSince1970: 1_700_000_000.5)
 
-      let described = try await database.read { transaction in
-        [
-          try Select($describe(1.5, [1, 2, 3], true, date, id, Int?.none)).fetchOne(transaction),
-          // A zero-length blob has no buffer behind it, and must still decode.
-          try Select($describe(-0.25, [], false, date, id, Int?.some(7))).fetchOne(transaction)
-        ]
+      let (described, longest, count) = try await database.read { transaction in
+        (
+          [
+            try Select($describe(1.5, [1, 2, 3], true, date, id, Int?.none)).fetchOne(transaction),
+            // A zero-length blob has no buffer behind it, and must still decode.
+            try Select($describe(-0.25, [], false, date, id, Int?.some(7))).fetchOne(transaction)
+          ],
+          try transaction.fetchOne("SELECT longestTitle(title) FROM notes", as: String.self),
+          // An aggregate over no rows still runs its body.
+          try transaction.fetchOne("SELECT titleCount(id) FROM notes WHERE 0", as: Int.self)
+        )
       }
-
       #expect(
         described == [
           "1.5 [1, 2, 3] true 1700000000.5 \(id.uuidString) -1",
           "-0.25 [] false 1700000000.5 \(id.uuidString) 7"
         ]
       )
-    }
-
-    @Test(arguments: ["", "plain text", "日本語", "before\u{0}after"])
-    func functionTextRoundTripsExactly(_ text: String) async throws {
-      let database = try await seededNotes()
-      let value = try await database.read { transaction in
-        try Select($repeated(text, 2)).fetchOne(transaction)
-      }
-      #expect(value == text + text)
-    }
-
-    @Test
-    func emptyBlobFunctionResultsStayBlobs() async throws {
-      let database = try await seededNotes()
-      let value = try await database.read { transaction in
-        try Select($echoedBlob([])).fetchOne(transaction)
-      }
-      #expect(value == [])
-    }
-
-    @Test
-    func aFunctionAskedForAnArgumentItWasNotGivenReportsIt() async throws {
-      let database = try await seededNotes()
-
-      let sum = try await database.read { transaction in
-        try #sql("SELECT variadicSum(2, 3)", as: Int.self).fetchOne(transaction)
-      }
-      #expect(sum == 5)
-
-      let error = await #expect(throws: SQLiteError.self) {
-        try await database.read { transaction in
-          try #sql("SELECT variadicSum(2)", as: Int.self).fetchOne(transaction)
-        }
-      }
-      #expect(error?.message?.contains("without an argument at index 1") == true)
-    }
-
-    @Test
-    func functionFailuresBecomeStatementErrors() async throws {
-      let database = try await seededNotes()
-
-      // The body threw.
-      let scalar = await #expect(throws: SQLiteError.self) {
-        try await database.read { transaction in
-          try #sql("SELECT failing(1)", as: Int.self).fetchOne(transaction)
-        }
-      }
-      #expect(scalar?.message?.contains("FunctionFailure") == true)
-
-      let aggregate = await #expect(throws: SQLiteError.self) {
-        try await database.read { transaction in
-          try #sql("SELECT failingTotal(id) FROM notes", as: Int.self).fetchOne(transaction)
-        }
-      }
-      #expect(aggregate?.message?.contains("FunctionFailure") == true)
+      #expect(longest == "xxxx")
+      #expect(count == 0)
 
       // An argument that does not decode fails before the body runs, on both the scalar path and
       // the aggregate's per-row step.
-      await #expect(throws: SQLiteError.self) {
-        try await database.read { transaction in
-          try #sql("SELECT \(quote: "repeated")('x', 'y')", as: String.self).fetchOne(transaction)
+      for sql in ["SELECT repeatedTitle('x', 'y')", "SELECT titleCount(title) FROM notes"] {
+        await #expect(throws: SQLiteError.self) {
+          try await database.fetchOne(sql: sql, as: String.self)
         }
       }
-      await #expect(throws: SQLiteError.self) {
-        try await database.read { transaction in
-          try #sql(
-            "SELECT \(quote: "rowCount")(\(Note.columns.title)) FROM \(Note.self)",
-            as: Int.self
-          )
-          .fetchOne(transaction)
-        }
+
+      // A function asking for an argument it was not given reports it.
+      #expect(try await database.fetchOne(sql: "SELECT variadicSum(2, 3)", as: Int.self) == 5)
+      let missingArgument = await #expect(throws: SQLiteError.self) {
+        try await database.fetchOne(sql: "SELECT variadicSum(2)", as: Int.self)
       }
-    }
-
-    @Test
-    func aggregatesSpanManyRowsAndManyGroups() async throws {
-      var configuration = SQLiteConfiguration.default
-      configuration.register(function: $longestTitle)
-      let database = try SQLiteQueue(path: ":memory:", configuration: configuration)
-
-      try await database.write { transaction in
-        try #sql(
-          """
-          CREATE TABLE samples (
-            id INTEGER PRIMARY KEY,
-            bucket INTEGER NOT NULL,
-            title TEXT NOT NULL
-          )
-          """,
-          as: Void.self
-        )
-        .execute(transaction)
-        // A large group, so the aggregation holds many rows before its body runs.
-        try Sample.insert {
-          for index in 1...500 {
-            Sample(
-              id: index,
-              bucket: index % 3,
-              title: String(repeating: "x", count: index % 40 + 1)
-            )
-          }
-        }
-        .execute(transaction)
-      }
-
-      let longest = try await database.read { transaction in
-        try Sample.select { $longestTitle($0.title) }.fetchOne(transaction) ?? nil
-      }
-      #expect(longest?.count == 40)
-
-      // A separate aggregation per group exercises SQLite's per-aggregation context slot.
-      let perGroup: [(Int, String?)] = try await database.read { transaction in
-        try Sample
-          .group(by: \.bucket)
-          .order(by: \.bucket)
-          .select { ($0.bucket, $longestTitle($0.title)) }.fetchAll(transaction)
-      }
-      #expect(perGroup.map(\.0) == [0, 1, 2])
-      #expect(perGroup.allSatisfy { $0.1?.isEmpty == false })
-    }
-
-    @Test
-    func aggregatesOverNoRowsStillRunTheirBody() async throws {
-      let database = try await seededNotes()
-
-      // With no rows to step through, SQLite calls only the finalizer, which has to create the
-      // aggregation state it would otherwise have found.
-      let count = try await database.read { transaction in
-        try Note.where { $0.id.eq(-1) }.select { $rowCount($0.id) }.fetchOne(transaction)
-      }
-      #expect(count == 0)
-
-      let longest = try await database.read { transaction in
-        try Note.where { $0.id.eq(-1) }.select { $longestTitle($0.title) }.fetchOne(transaction)
-      }
-      #expect(longest == .some(nil))
-    }
-
-    @Test
-    func extensionsComposeWithTheCrossProcessConfiguration() async throws {
-      try await withTemporaryDirectory("fn") { directory in
-        // Function registration composes with the native cross-process defaults.
-        var configuration = SQLiteConfiguration.default
-        configuration.register(function: $repeated)
-
-        let database = try OrbitIPCDatabase(
-          path: .file(directory.appendingPathComponent("db.sqlite")),
-          configuration: configuration,
-          coordination: .init(directory: directory)
-        )
-
-        try await database.write { transaction in
-          try #sql(
-            "CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL)",
-            as: Void.self
-          )
-          .execute(transaction)
-          try Note.insert { Note(id: 1, title: "ab") }.execute(transaction)
-        }
-
-        let repeatedTitle = try await database.read { transaction in
-          try Note.select { $repeated($0.title, 2) }.fetchOne(transaction)
-        }
-        #expect(repeatedTitle == "abab")
-
-        // The native defaults must have survived registration.
-        let trustedSchema = try await database.read { transaction in
-          try #sql("PRAGMA trusted_schema", as: Int.self).fetchOne(transaction)
-        }
-        #expect(trustedSchema == 0)
-      }
-    }
-
-    @Test
-    func manyConcurrentAggregatesMakeProgress() async throws {
-      var configuration = SQLiteConfiguration.default
-      configuration.register(function: $longestTitle)
-
-      try await withPooledDatabase(configuration: configuration, readerCount: 16) {
-        database in
-        try await database.write { transaction in
-          try #sql(
-            "CREATE TABLE notes (id INTEGER PRIMARY KEY, title TEXT NOT NULL)",
-            as: Void.self
-          )
-          .execute(transaction)
-          try Note.insert {
-            for index in 1...2000 {
-              Note(id: index, title: String(repeating: "x", count: index % 40 + 1))
-            }
-          }
-          .execute(transaction)
-        }
-
-        // Every aggregation runs on the reader thread SQLite called it from, and keeps its rows in
-        // its own aggregate context. Run many at once to hold that separation down.
-        let lengths = try await concurrentReads(128, of: database) { transaction in
-          try Note.select { $longestTitle($0.title) }.fetchOne(transaction)??.count
-        }
-        #expect(lengths.count == 128)
-        #expect(lengths.allSatisfy { $0 == 40 })
-      }
-    }
-
-    @Test(.libraryHooks)
-    func functionCallbacksRunThroughTheSuppliedTableRatherThanTheLinkedBuild() async throws {
-      // A function's callbacks read arguments and write results through the build that called them,
-      // which is the whole reason a table has to carry them. Interposing those entry points is the
-      // only way to observe that the callback used this table rather than the linked SQLite.
-      let userData = Lock(0)
-      let readArguments = Lock(0)
-      let writtenResults = Lock(0)
-
-      var configuration = SQLiteConfiguration.default
-      configuration.library.scalarFunctions!.callbacks.context.userData = LibraryHooks.userData {
-        context in
-        userData.withLock { $0 += 1 }
-        return builtInTestLibrary.scalarFunctions!.callbacks.context.userData(context)
-      }
-      configuration.library.scalarFunctions!.callbacks.argument.text = LibraryHooks.argumentText {
-        value in
-        readArguments.withLock { $0 += 1 }
-        return builtInTestLibrary.scalarFunctions!.callbacks.argument.text(value)
-      }
-      configuration.library.scalarFunctions!.callbacks.result.text = LibraryHooks.resultText {
-        context,
-        text,
-        count in
-        writtenResults.withLock { $0 += 1 }
-        builtInTestLibrary.scalarFunctions!.callbacks.result.text(context, text, count)
-      }
-      configuration.register(function: $repeated)
-
-      let driver = try SQLiteQueue(path: ":memory:", configuration: configuration)
-      let value = try await driver.read { transaction in
-        try #sql("SELECT repeated('ab', 2)", as: String.self).fetchOne(transaction)
-      }
-
-      #expect(value == "abab")
-      #expect(userData.withLock { $0 } == 1)
-      #expect(readArguments.withLock { $0 } == 1)
-      #expect(writtenResults.withLock { $0 } == 1)
-    }
-
-    @Test(.libraryHooks)
-    func aggregateCallbacksRunThroughTheSuppliedTableRatherThanTheLinkedBuild() async throws {
-      let aggregateContexts = Lock(0)
-      var configuration = SQLiteConfiguration.default
-      configuration.library.aggregateFunctions!.context = LibraryHooks.aggregateContext {
-        context,
-        size in
-        aggregateContexts.withLock { $0 += 1 }
-        return builtInTestLibrary.aggregateFunctions!.context(context, size)
-      }
-      configuration.register(function: $longestTitle)
-
-      let driver = try SQLiteQueue(path: ":memory:", configuration: configuration)
-      let longest = try await driver.read { transaction in
-        try #sql(
-          "SELECT longestTitle(x) FROM (SELECT 'ab' AS x UNION SELECT 'abcd')",
-          as: String?.self
-        )
-        .fetchOne(transaction)
-      }
-
-      #expect(longest == "abcd")
-      // Two steps and one finalizer, each reaching for the same per-invocation slot.
-      #expect(aggregateContexts.withLock { $0 } == 3)
-    }
-
-    @Test
-    func functionsAreAvailableToConnectionSetupSQL() async throws {
-      var configuration = SQLiteConfiguration.default
-      configuration.register(function: $repeated)
-      configuration.setups.append(contentsOf: [
-        .sql("CREATE TABLE configured (value TEXT NOT NULL)"),
-        .sql("INSERT INTO configured VALUES (repeated('ab', 2))")
-      ])
-      let driver = try SQLiteQueue(path: ":memory:", configuration: configuration)
-
-      let values = try await driver.read { transaction in
-        try #sql("SELECT value FROM configured", as: String.self).fetchAll(transaction)
-      }
-      #expect(values == ["abab"])
+      #expect(missingArgument?.message?.contains("without an argument at index 1") == true)
     }
 
     @Test
     func structuredQueriesRegistrationsWorkOnAnOpenConnection() throws {
       var owner = try SQLiteConnection(path: ":memory:", configuration: .default)
       try owner.withConnectionAccess { connection in
-        try connection.register(function: $repeated)
+        try connection.register(function: $repeatedTitle)
         try connection.register(function: $longestTitle)
-        try connection.register(collation: $reversedText)
+        try connection.register(collation: $characterCount)
       }
       let (repeated, longest, sorted) = try owner.withReadConnection { connection in
         (
-          try #sql("SELECT repeated('ab', 2)", as: String.self).fetchOne(connection),
-          try #sql(
+          try connection.fetchOne("SELECT repeatedTitle('ab', 2)", as: String.self),
+          try connection.fetchOne(
             "SELECT longestTitle(column1) FROM (VALUES ('a'), ('abcd'))",
-            as: String?.self
-          )
-          .fetchOne(connection),
-          try #sql(
-            "SELECT column1 FROM (VALUES ('ab'), ('ba')) ORDER BY column1 COLLATE reversedText",
+            as: String.self
+          ),
+          try connection.fetchAll(
+            "SELECT column1 FROM (VALUES ('ab'), ('é')) ORDER BY column1 COLLATE characterCount",
             as: String.self
           )
-          .fetchAll(connection)
         )
       }
       #expect(repeated == "abab")
       #expect(longest == "abcd")
-      #expect(sorted == ["ba", "ab"])
-    }
-
-    @Table("samples")
-    private struct Sample: Equatable, Sendable {
-      let id: Int
-      var bucket: Int
-      var title: String
-    }
-
-    @Table("notes")
-    private struct Note: Equatable, Sendable {
-      let id: Int
-      var title: String
+      #expect(sorted == ["é", "ab"])
     }
   #endif
 #endif

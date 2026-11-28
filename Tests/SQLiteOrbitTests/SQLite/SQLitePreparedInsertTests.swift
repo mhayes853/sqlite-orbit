@@ -17,7 +17,7 @@
     // MARK: - Oracle
 
     @Test
-    func recordInsertsRunWhatTheQueryBuilderRuns() async throws {
+    func recordDraftAndUpsertInsertsRunWhatTheQueryBuilderRuns() async throws {
       guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       try expectSameInserts(
         everything,
@@ -29,11 +29,7 @@
           try insert.execute(row)
         }
       )
-    }
 
-    @Test
-    func draftInsertsRunWhatTheQueryBuilderRuns() async throws {
-      guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       let drafts =
         everything.map(Everything.Draft.init) + [Everything.Draft(everything[0], id: nil)]
       try expectSameInserts(
@@ -46,11 +42,7 @@
           try insert.execute(row)
         }
       )
-    }
 
-    @Test
-    func upsertsRunWhatTheQueryBuilderRuns() async throws {
-      guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       try expectSameInserts(
         everything,
         schema: everythingSchema,
@@ -182,56 +174,18 @@
           try insert.execute(row.0, row.1)
         }
       )
-    }
 
-    // Every built-in type and its optional, and a representation that binds something other
-    // than what it stores, held to what the query builder binds for each.
-    @Test
-    func builtInColumnsBindWhatTheQueryBuilderBinds() async throws {
-      guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
-      try expectSameInserts(
-        primitives,
-        schema: primitivesSchema,
-        table: "primitives",
-        structuredQueries: { row in Primitives.insert { row } },
-        plan: { transaction, row in
-          var insert = try transaction.prepareInsert(Primitives.self)
-          try insert.execute(row)
-        }
-      )
-      try expectSameInserts(
-        primitives,
-        schema: primitivesSchema,
-        table: "primitives",
-        structuredQueries: { row in Primitives.upsert { row } },
-        plan: { transaction, row in
-          let rowID = try transaction.insert(row, onConflict: .update)
-          #expect(rowID == Int64(row.id))
-        }
-      )
-      try expectSameInserts(
-        primitives.map(Primitives.Draft.init) + [Primitives.Draft(primitives[1], id: nil)],
-        schema: primitivesSchema,
-        table: "primitives",
-        structuredQueries: { row in Primitives.insert { row } },
-        plan: { transaction, row in try transaction.insert(row) }
-      )
-    }
-
-    // A partial insert reads each argument at its offset in the tuple of a run's arguments, so
-    // these mix sizes and alignments, optionals and a column group, whose offsets each depend on
-    // the arguments before them.
-    @Test
-    func partialInsertsBindMixedArgumentsWhatTheQueryBuilderBinds() async throws {
-      guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
-      let rows = primitives.map {
+      // A partial insert reads each argument at its offset in the tuple of a run's arguments, so
+      // these mix sizes and alignments, optionals and a column group, whose offsets each depend on
+      // the arguments before them.
+      let mixedRows = primitives.map {
         (
           $0.int8, $0.int64, $0.flag, $0.optionalInt8, $0.text, $0.optionalUInt16, $0.double,
           $0.coordinates, $0.optionalBytes, $0.float, $0.doubled, $0.optionalFlag
         )
       }
       try expectSameInserts(
-        rows,
+        mixedRows,
         schema: primitivesSchema,
         table: "primitives",
         structuredQueries: { row in
@@ -288,6 +242,51 @@
           try insert.execute(row.0, row.1, row.2, row.3)
         }
       )
+    }
+
+    // Every built-in type and its optional, and a representation that binds something other
+    // than what it stores, held to what the query builder binds for each.
+    @Test
+    func builtInColumnsBindWhatTheQueryBuilderBinds() async throws {
+      guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
+      try expectSameInserts(
+        primitives,
+        schema: primitivesSchema,
+        table: "primitives",
+        structuredQueries: { row in Primitives.insert { row } },
+        plan: { transaction, row in
+          var insert = try transaction.prepareInsert(Primitives.self)
+          try insert.execute(row)
+        }
+      )
+      try expectSameInserts(
+        primitives,
+        schema: primitivesSchema,
+        table: "primitives",
+        structuredQueries: { row in Primitives.upsert { row } },
+        plan: { transaction, row in
+          let rowID = try transaction.insert(row, onConflict: .update)
+          #expect(rowID == Int64(row.id))
+        }
+      )
+      try expectSameInserts(
+        primitives.map(Primitives.Draft.init) + [Primitives.Draft(primitives[1], id: nil)],
+        schema: primitivesSchema,
+        table: "primitives",
+        structuredQueries: { row in Primitives.insert { row } },
+        plan: { transaction, row in try transaction.insert(row) }
+      )
+
+      // An unsigned value too large for SQLite is refused.
+      let database = try inMemoryDatabase()
+      try await database.write { transaction in
+        try transaction.executeScript(primitivesSchema)
+        var row = primitives[0]
+        row.uint64 = .max
+        var insert = try transaction.prepareInsert(Primitives.self)
+        #expect(throws: (any Error).self) { try insert.execute(row) }
+        #expect(try Primitives.all.fetchCount(transaction) == 0)
+      }
     }
 
     // A bulk run binds each element through the same plan as a single run, from an element the
@@ -350,21 +349,7 @@
     }
 
     @Test
-    func anUnsignedValueTooLargeForSQLiteIsRefused() async throws {
-      guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
-      let database = try inMemoryDatabase()
-      try await database.write { transaction in
-        try transaction.executeScript(primitivesSchema)
-        var row = primitives[0]
-        row.uint64 = .max
-        var insert = try transaction.prepareInsert(Primitives.self)
-        #expect(throws: (any Error).self) { try insert.execute(row) }
-        #expect(try Primitives.all.fetchCount(transaction) == 0)
-      }
-    }
-
-    @Test
-    func partialUpsertsUpdateOnlyTheListedColumns() async throws {
+    func partialUpsertsUpdateOnlyTheListedColumnsWhichMustIncludeTheKey() async throws {
       guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       let database = try await remindersDatabase()
       try await database.write { transaction in
@@ -389,6 +374,14 @@
           Reminder(id: 2, title: "Tea", listID: 0)
         ]
       )
+
+      // And a partial update must write the primary key.
+      try await database.write { transaction in
+        let error = #expect(throws: SQLiteError.self) {
+          try prepareTitleUpsert(transaction)
+        }
+        #expect(error?.code == .misuse)
+      }
     }
 
     // MARK: - Conflicts
@@ -450,18 +443,6 @@
           Reminder(id: 2, title: "Rye", listID: 1)
         ]
       )
-    }
-
-    @Test
-    func aPartialUpdateMustWriteThePrimaryKey() async throws {
-      guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
-      let database = try await remindersDatabase()
-      try await database.write { transaction in
-        let error = #expect(throws: SQLiteError.self) {
-          try prepareTitleUpsert(transaction)
-        }
-        #expect(error?.code == .misuse)
-      }
     }
 
     @Test
@@ -624,7 +605,7 @@
     // MARK: - Conveniences
 
     @Test
-    func conveniencesInsertWithEachConflictClause() async throws {
+    func conveniencesInsertWithEachConflictClauseAndReuseOnePlanForEach() async throws {
       guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
       let database = try await remindersDatabase()
       try await database.write { transaction in
@@ -669,12 +650,8 @@
         try Reminder.all.order(by: \.id).fetchAll($0).map(\.title)
       }
       #expect(titles == ["Milk", "Rye", "4", "5"])
-    }
 
-    @Test
-    func conveniencesReuseOnePlanPerTableAndConflictClause() async throws {
-      guard #available(iOS 17, macOS 14, tvOS 17, watchOS 10, *) else { return }
-      let database = try await remindersDatabase()
+      // The conveniences reuse one plan per table and conflict clause.
       try await database.write { transaction in
         let first = try transaction.prepareInsert(Reminder.self).sql
         let second = try transaction.prepareInsert(Reminder.self).sql

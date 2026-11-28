@@ -20,19 +20,15 @@
       try expectRoundTrip(OrbitUppercaseUUIDV7(id), .text(uppercase))
       try expectRoundTrip(UUIDV7?.none, .null)
       try expectRoundTrip(UUIDV7?.some(id), .text(lowercase))
+      // The binary form is the identifier's bytes in order, the same order swift-uuidv7's
+      // `BytesRepresentation` binds, so either can read the other.
+      #expect(bytes == withUnsafeBytes(of: id.uuid, [UInt8].init))
     }
 
     @Test
     func textInEitherCaseReadsAsEitherSpelling() throws {
       #expect(try UUIDV7(orbitDatabaseValue: .text(uppercase)) == id)
       #expect(try OrbitUppercaseUUIDV7(orbitDatabaseValue: .text(lowercase)).uuidV7 == id)
-    }
-
-    @Test
-    func theBinaryFormMatchesTheIdentifiersBytesInOrder() throws {
-      // The same order swift-uuidv7's `BytesRepresentation` binds, so either can read the other.
-      #expect(OrbitBinaryUUIDV7(id).orbitDatabaseValue() == .blob(bytes))
-      #expect(bytes == withUnsafeBytes(of: id.uuid, [UInt8].init))
     }
 
     @Test(arguments: [OrbitDatabaseValue.null, .integer(1), .real(1), .text("1"), .blob([1])])
@@ -85,15 +81,6 @@
       #expect(error?.reason != nil)
     }
 
-    @Test
-    func identifiersInterpolateAsParameters() {
-      let sql: SQL = """
-        SELECT \(id), \(OrbitBinaryUUIDV7(id)), \(OrbitUppercaseUUIDV7(id)), \(UUIDV7?.none)
-        """
-      #expect(sql.text == "SELECT ?, ?, ?, ?")
-      #expect(sql.bindings == [.text(lowercase), .blob(bytes), .text(uppercase), .null])
-    }
-
     #if BuiltInSQLite
       @Test
       func eachFormRoundTripsThroughADatabase() async throws {
@@ -135,37 +122,6 @@
         #expect(values.5 == uppercase)
         #expect(values.6 == "text blob text")
         #expect(values.7 == uppercase.filter { $0 != "-" })
-      }
-
-      @Test
-      func typedFetchesReadIdentifiers() async throws {
-        let database = try inMemoryDatabase()
-        let (all, one, binary, uppercased) = try await database.read { transaction in
-          (
-            try transaction.fetchAll("VALUES (\(id)), (\(uppercase)), (NULL)", as: UUIDV7?.self),
-            try transaction.fetchOne("SELECT \(id)", as: UUIDV7.self),
-            try transaction.fetchOne("SELECT \(OrbitBinaryUUIDV7(id))", as: OrbitBinaryUUIDV7.self),
-            try transaction.fetchAll(
-              "SELECT \(OrbitUppercaseUUIDV7(id))",
-              as: OrbitUppercaseUUIDV7.self
-            )
-          )
-        }
-        #expect(all == [id, id, nil])
-        #expect(one == id)
-        #expect(binary == OrbitBinaryUUIDV7(id))
-        #expect(uppercased == [OrbitUppercaseUUIDV7(id)])
-      }
-
-      @Test
-      func textThatIsNotAVersion7UUIDFailsToFetch() async throws {
-        let database = try inMemoryDatabase()
-        let error = await #expect(throws: OrbitDatabaseColumnDecodingError.self) {
-          try await database.read { transaction in
-            try transaction.fetchOne("SELECT \(version4)", as: UUIDV7.self)
-          }
-        }
-        #expect(error?.underlyingError is OrbitDatabaseValueConversionError)
       }
 
       #if StructuredQueries

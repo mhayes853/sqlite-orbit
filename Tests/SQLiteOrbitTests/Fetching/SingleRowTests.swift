@@ -90,7 +90,7 @@
       }
 
       @Test
-      func anEmptyTableReadsItsDefaultWithoutInsertingIt() async throws {
+      func anEmptyOrEmptiedTableReadsItsDefaultWithoutInsertingIt() async throws {
         let database = try await settingsDatabase()
 
         @SingleRow(Settings.self, database: database) var settings
@@ -100,6 +100,14 @@
         #expect($settings.loadError == nil)
         let count = try await database.read { try Settings.all.fetchCount($0) }
         #expect(count == 0)
+
+        // Saving replaces the default, and deleting the singleton restores it.
+        try await $settings.save(Settings(id: 0, theme: "dark", launchCount: 4))
+        try await waitUntil { settings.theme == "dark" && settings.launchCount == 4 }
+        try await database.write { transaction in
+          try Settings.find(0).delete().execute(transaction)
+        }
+        try await waitUntil { settings == .defaultValue }
       }
 
       @MainActor
@@ -128,21 +136,6 @@
         #expect(persisted == Settings(id: 0, theme: "dark", launchCount: 1))
         #expect(!$settings.isSaving)
         #expect($settings.saveError == nil)
-      }
-
-      @Test
-      func saveReplacesTheSingletonAndDeletingItRestoresTheDefault() async throws {
-        let database = try await settingsDatabase()
-
-        @SingleRow(Settings.self, database: database) var settings
-        try await $settings.save(Settings(id: 0, theme: "dark", launchCount: 4))
-        try await waitUntil { settings.theme == "dark" && settings.launchCount == 4 }
-
-        try await database.write { transaction in
-          try Settings.find(0).delete().execute(transaction)
-        }
-
-        try await waitUntil { settings == .defaultValue }
       }
 
       @Test
