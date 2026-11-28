@@ -239,6 +239,87 @@ final class SQLitePreparedStatementState {
   }
 }
 
+// MARK: - Inspecting
+
+extension SQLitePreparedStatement {
+  /// How many columns each row the statement returns has.
+  ///
+  /// A statement that returns no rows, such as an `INSERT` without `RETURNING`, has none, and so
+  /// does SQL that holds no statement. SQLite recompiles a statement whose schema changed when it
+  /// next runs, so `SELECT *` reports the table's columns as of its latest run.
+  ///
+  /// ```swift
+  /// let statement = try transaction.prepare("SELECT id, title FROM reminders")
+  /// print(statement.columnCount)  // 2
+  /// ```
+  public var columnCount: Int {
+    guard let state else { return 0 }
+    return Int(library.pointee.columns.count(state.statement.pointer))
+  }
+
+  /// The name of a column of the rows the statement returns, as SQLite reports it.
+  ///
+  /// ```swift
+  /// let statement = try transaction.prepare("SELECT id, title AS name FROM reminders")
+  /// print(statement.columnName(at: 1))  // name
+  /// ```
+  ///
+  /// - Parameter index: The column's zero-based position, which must be less than
+  ///   ``columnCount``.
+  /// - Returns: The column's name, or an empty string when SQLite has none for it.
+  public func columnName(at index: Int) -> String {
+    precondition(
+      index >= 0 && index < columnCount,
+      "Column index \(index) is out of range for a statement of \(columnCount) columns"
+    )
+    guard let state else { return "" }
+    return library.pointee.columns.name(state.statement.pointer, Int32(index))
+      .map(String.init(cString:)) ?? ""
+  }
+
+  /// Whether the statement only reads.
+  ///
+  /// This is what decides whether the reading runs, the `rowCursor`, `fetchCursor`, `fetchAll`
+  /// and `fetchOne` families, accept the statement. SQL that holds no statement only reads.
+  ///
+  /// ```swift
+  /// let statement = try transaction.prepare("DELETE FROM reminders WHERE id = ?")
+  /// print(statement.isReadOnly)  // false
+  /// ```
+  public var isReadOnly: Bool {
+    state?.statement.isReadOnly ?? true
+  }
+
+  /// The part of the database the statement reads, including what triggers and views it runs
+  /// read.
+  ///
+  /// It is what each run reports to observers. A run that finds the statement recompiled, or the
+  /// schema changed, updates it to what the statement reads now.
+  ///
+  /// ```swift
+  /// let statement = try transaction.prepare("SELECT title FROM reminders WHERE id = ?")
+  /// let reminders = OrbitDatabaseRegion(table: "reminders")
+  /// print(reminders.contains(statement.readRegion))  // true
+  /// ```
+  public var readRegion: OrbitDatabaseRegion {
+    state?.statement.readRegion ?? .empty
+  }
+
+  /// The part of the database the statement may change, including what triggers it runs change.
+  ///
+  /// It is what each run reports to observers. A statement that only reads changes nothing, and
+  /// one that may write without SQLite saying what, such as `VACUUM`, may change everything.
+  ///
+  /// ```swift
+  /// let statement = try transaction.prepare("UPDATE reminders SET title = ? WHERE id = ?")
+  /// let titles = OrbitDatabaseRegion(column: "title", in: "reminders")
+  /// print(titles.contains(statement.changedRegion))  // true
+  /// ```
+  public var changedRegion: OrbitDatabaseRegion {
+    state?.statement.changedRegion ?? .empty
+  }
+}
+
 // MARK: - Preparing
 
 extension SQLiteReadTransaction {
