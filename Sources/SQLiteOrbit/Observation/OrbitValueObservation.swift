@@ -849,8 +849,10 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
 
   /// Starts this observation and delivers its changes through `scheduler`.
   ///
-  /// The observation runs until the returned subscription is cancelled or released, so store it
-  /// for as long as you want the callbacks. Without a `scheduler`, callbacks run asynchronously on
+  /// The subscription delivers changes until it is cancelled or released, so store it for as long
+  /// as you want the callbacks. Every subscription to this observation on the same database shares
+  /// one runtime, which stops when its last subscription ends; a subscription that joins a running
+  /// one starts from its latest value. Without a `scheduler`, callbacks run asynchronously on
   /// Swift's cooperative executor, as with ``OrbitValueObservationScheduler/async(priority:)``.
   ///
   /// The transaction observer is registered before the initial fetch, so a commit cannot fall into
@@ -885,7 +887,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   ///     without an extra hop. Defaults to the caller's isolation.
   ///   - onError: Receives the error that ends the observation.
   ///   - onChange: Receives each observed change.
-  /// - Returns: A subscription that ends the observation when cancelled or released.
+  /// - Returns: A subscription that leaves the shared runtime when cancelled or released.
   /// - Throws: Whatever registering a transaction observer on `database` throws.
   public func subscribe<
     Database: OrbitObservableDatabase,
@@ -933,7 +935,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   ///     without an extra hop. Defaults to the caller's isolation.
   ///   - onError: Receives the error that ends the observation.
   ///   - onUpdate: Receives the outcome of each accepted fetch.
-  /// - Returns: A subscription that ends the observation when cancelled or released.
+  /// - Returns: A subscription that leaves the shared runtime when cancelled or released.
   /// - Throws: Whatever registering a transaction observer on `database` throws.
   public func subscribe<
     Database: OrbitObservableDatabase,
@@ -989,7 +991,7 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   ///   - scheduler: A scheduler that guarantees main-actor delivery.
   ///   - onError: Receives the error that ends the observation.
   ///   - onChange: Receives each observed change.
-  /// - Returns: A subscription that ends the observation when cancelled or released.
+  /// - Returns: A subscription that leaves the shared runtime when cancelled or released.
   /// - Throws: Whatever registering a transaction observer on `database` throws.
   @MainActor
   public func subscribe<
@@ -1111,7 +1113,9 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
 
   /// Returns an asynchronous sequence of values and the sources that prompted their fetches.
   ///
-  /// The observation starts when iteration begins and ends when the iterator is released.
+  /// Each iteration subscribes when it begins and gets its own buffer, sharing the observation's
+  /// runtime with every other subscription on the same database. Releasing the iterator ends its
+  /// subscription; the runtime stops when its last subscription ends.
   /// `bufferingPolicy` decides which elements survive when the observation produces them faster
   /// than the sequence is consumed; by default every one of them is kept.
   ///
@@ -1137,7 +1141,9 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
 
   /// Returns an asynchronous sequence of observed values without their source metadata.
   ///
-  /// The observation starts when iteration begins and ends when the iterator is released.
+  /// Each iteration subscribes when it begins and gets its own buffer, sharing the observation's
+  /// runtime with every other subscription on the same database. Releasing the iterator ends its
+  /// subscription; the runtime stops when its last subscription ends.
   /// `bufferingPolicy` decides which elements survive when the observation produces them faster
   /// than the sequence is consumed; by default every one of them is kept.
   ///
