@@ -1,13 +1,3 @@
-#if canImport(Darwin)
-  import Darwin
-#elseif canImport(Glibc)
-  import Glibc
-#elseif canImport(Android)
-  import Android
-#elseif canImport(WASILibc)
-  import WASILibc
-#endif
-
 // A library's step entry point is a C function pointer, which captures nothing, so an interceptor
 // installed with `withStatementStepInterceptor` cannot be stored in the table as it is. The
 // interceptor is kept on the installing thread instead, and the table gets a trampoline that finds
@@ -82,16 +72,13 @@ enum SQLiteStepInterception {
     // With one runtime thread, the wrappers can live in process storage.
     nonisolated(unsafe) private static var top: UnsafeMutablePointer<Frame>?
   #else
-    private static let key: pthread_key_t = {
-      var key = pthread_key_t()
-      let code = pthread_key_create(&key, nil)
-      precondition(code == 0, "Could not create the thread key statement step interceptors are found by.")
-      return key
-    }()
+    private static let key = ThreadLocalKey(
+      failureMessage: "Could not create the thread key statement step interceptors are found by."
+    )
 
     private static var top: UnsafeMutablePointer<Frame>? {
-      get { pthread_getspecific(key)?.assumingMemoryBound(to: Frame.self) }
-      set { pthread_setspecific(key, newValue) }
+      get { key.value?.assumingMemoryBound(to: Frame.self) }
+      set { key.value = UnsafeMutableRawPointer(newValue) }
     }
   #endif
 }

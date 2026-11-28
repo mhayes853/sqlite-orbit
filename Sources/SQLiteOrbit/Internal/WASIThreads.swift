@@ -92,6 +92,9 @@
   ) -> Int32
 
   @_extern(c)
+  func pthread_key_delete(_ key: pthread_key_t) -> Int32
+
+  @_extern(c)
   func pthread_getspecific(_ key: pthread_key_t) -> UnsafeMutableRawPointer?
 
   @_extern(c)
