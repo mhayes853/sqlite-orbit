@@ -82,6 +82,9 @@ private enum OrbitValueObservationRegionSource: Sendable {
   case automatic
   case constantOnFirstFetch
   case constant(OrbitDatabaseRegion)
+  case resolvedOnFirstFetch(
+    @Sendable (borrowing SQLiteReadTransaction) throws -> OrbitDatabaseRegion
+  )
 
   var initialRegion: OrbitDatabaseRegion? {
     guard case .constant(let region) = self else { return nil }
@@ -103,6 +106,11 @@ private enum OrbitValueObservationRegionSource: Sendable {
       firstFetchRegion.record(output.region)
       return output
     case .constant(let region):
+      return (try fetch(transaction), region)
+    case .resolvedOnFirstFetch(let resolve):
+      if let region = firstFetchRegion.region { return (try fetch(transaction), region) }
+      let region = try resolve(transaction)
+      firstFetchRegion.record(region)
       return (try fetch(transaction), region)
     }
   }
@@ -299,8 +307,8 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
   /// Use it only when the fetch's reads do not depend on what it finds. A fetch that reads one
   /// table and then, depending on a row it found there, reads a second is not one of these: the
   /// second table would go unwatched whenever the first fetch happened not to reach it, and a
-  /// write to it would be missed. ``tracking(region:_:)`` says the same thing ahead of time, for
-  /// a fetch whose region you already know.
+  /// write to it would be missed. The `tracking(region:_:)` overloads say the same thing ahead of
+  /// time, for a fetch whose region you already know.
   ///
   /// ```swift
   /// let incompleteCount = OrbitValueObservation.trackingConstantRegion { transaction in
@@ -329,6 +337,41 @@ public struct OrbitValueObservation<Value: Sendable>: Sendable {
     _ fetch: @escaping @Sendable (borrowing SQLiteReadTransaction) throws -> Value
   ) -> Self {
     tracking(regionSource: .constant(region), fetch)
+  }
+
+  /// Creates an observation whose value is produced by `fetch` and whose region `region` works
+  /// out from the database.
+  ///
+  /// Use it when the region is fixed but depends on the schema, such as the tables a query names
+  /// or a table's columns. `region` runs once per runtime, in the same read transaction as the
+  /// first fetch and just before it, and the observation watches what it returns from then on.
+  /// Creating the observation, or one of its asynchronous sequences, reads nothing.
+  ///
+  /// The region is not worked out again when the schema changes, so a region that names columns
+  /// misses those added later.
+  ///
+  /// ```swift
+  /// let incompleteCount = OrbitValueObservation.tracking(
+  ///   region: { try OrbitDatabaseRegion("SELECT * FROM reminders", in: $0) },
+  ///   { transaction in
+  ///     try transaction.fetchOne(
+  ///       "SELECT count(*) FROM reminders WHERE NOT isCompleted",
+  ///       as: Int.self
+  ///     ) ?? 0
+  ///   }
+  /// )
+  /// ```
+  ///
+  /// - Parameters:
+  ///   - region: Works out the database region read by `fetch`. An error it throws ends the
+  ///     observation, as a failed first fetch does.
+  ///   - fetch: Reads the observed value from a transaction.
+  /// - Returns: An observation that produces whatever `fetch` returns.
+  public static func tracking(
+    region: @escaping @Sendable (borrowing SQLiteReadTransaction) throws -> OrbitDatabaseRegion,
+    _ fetch: @escaping @Sendable (borrowing SQLiteReadTransaction) throws -> Value
+  ) -> Self {
+    tracking(regionSource: .resolvedOnFirstFetch(region), fetch)
   }
 
   private static func tracking(
