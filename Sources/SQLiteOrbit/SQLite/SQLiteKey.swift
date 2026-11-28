@@ -6,10 +6,13 @@
   import Android
 #elseif canImport(WASILibc)
   import WASILibc
+#elseif canImport(ucrt)
+  import ucrt
 #endif
 
-// `memset`, whose imported signature differs by platform.
-#if canImport(Darwin)
+// `memset`, whose imported signature differs by platform. Darwin's and the Windows CRT's
+// declarations leave the destination's nullability unannotated, so it imports as optional there.
+#if canImport(Darwin) || os(Windows)
   private typealias OrbitEraseBytes =
     @convention(c) @Sendable (UnsafeMutableRawPointer?, Int32, Int) -> UnsafeMutableRawPointer?
 #else
