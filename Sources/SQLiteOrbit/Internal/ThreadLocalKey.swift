@@ -16,8 +16,14 @@
   /// A slot holding one raw pointer per thread, which a C callback that captures nothing can still
   /// reach.
   ///
-  /// A key is created once and never deleted, so it belongs in a `static let`.
-  struct ThreadLocalKey: @unchecked Sendable {
+  /// The system has a fixed number of these slots, around a thousand on Linux and Windows, so a
+  /// key belongs in a `static let`, which lives as long as the process. It cannot be copied, and
+  /// it frees its slot when it goes, so a key made anywhere shorter-lived gives the slot back
+  /// rather than leaking it.
+  ///
+  /// A pointer the key holds is borrowed: nothing is released for a thread when it exits, or when
+  /// the key goes.
+  struct ThreadLocalKey: ~Copyable, @unchecked Sendable {
     #if os(Windows)
       private let index: DWORD
     #else
@@ -36,6 +42,14 @@
         let code = pthread_key_create(&key, nil)
         precondition(code == 0, failureMessage)
         self.key = key
+      #endif
+    }
+
+    deinit {
+      #if os(Windows)
+        TlsFree(self.index)
+      #else
+        pthread_key_delete(self.key)
       #endif
     }
 
